@@ -1,0 +1,37 @@
+name:          ftdi
+version:       0.1
+cabal-version: >=1.6
+build-type:    Simple
+stability:     experimental
+author:        Roel van Dijk, Bas van Dijk
+maintainer:    vandijk.roel@gmail.com, v.dijk.bas@gmail.com
+copyright:     (c) 2009 Roel van Dijk, Bas van Dijk
+license:       BSD3
+license-file:  LICENSE
+synopsis:      A thin layer over USB to communicate with FTDI chips
+category:      System
+
+flag example
+  description: Build an example program
+  default:     True
+
+-- Library
+--   exposed-modules: System.FTDI
+--   build-depends: base >= 3.0.3.1 && < 4.2
+--                , usb == 0.1.*
+
+executable example
+  main-is: example.hs
+
+  build-depends: base                      >= 4       && < 4.2
+               , bytestring                >= 0.9.1.4 && < 0.10
+               , iteratee                  >= 0.2.4   && < 0.3
+               , MonadCatchIO-transformers >= 0.0.1   && < 0.1
+               , safe                      == 0.2.*
+               , transformers              >= 0.1.4   && < 0.2
+               , usb                       == 0.3.*
+
+  if flag(example)
+    buildable: True
+  else
+    buildable: False
