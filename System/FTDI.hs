@@ -17,7 +17,7 @@ module System.FTDI where
 import Prelude hiding ( drop )
 
 import Control.Exception              ( Exception, bracket, throwIO )
-import Control.Monad                  ( liftM2 )
+import Control.Monad                  ( liftM, liftM2 )
 import Control.Monad.CatchIO          ( MonadCatchIO )
 import Data.Bits                      ( Bits, (.|.), (.&.)
                                       , complement, setBit
@@ -26,8 +26,10 @@ import Data.Bits                      ( Bits, (.|.), (.&.)
 import Data.Data                      ( Data )
 import Data.Function                  ( on )
 import Data.List                      ( minimumBy )
-import Data.Iteratee.Base             ( EnumeratorGM, drop )
-import Data.Iteratee.Base.StreamChunk ( ReadableChunk )
+
+import qualified Data.Iteratee.Base as It
+import Data.Iteratee.WrappedByteString ( WrappedByteString )
+
 import Data.Typeable                  ( Typeable )
 import Data.Word                      ( Word8, Word16 )
 import Safe                           ( atMay, headMay )
@@ -251,7 +253,6 @@ supportedSubDivisors :: ChipType -> [Int]
 supportedSubDivisors ChipType_AM = [0, 1, 2, 4]
 supportedSubDivisors _           = [0..7]
 
--------------------------------------------------------------------------------
 
 -------------------------------------------------------------------------------
 -- Devices
@@ -334,16 +335,24 @@ withInterface h c = bracket (openInterface h c) closeInterface
 -- Enumerators
 -------------------------------------------------------------------------------
 
-enumRead :: (ReadableChunk s el, MonadCatchIO m)
-         => InterfaceHandle -> EnumeratorGM s el m a
-enumRead ifHnd iter =
-    USB.enumReadBulk (ifHndUSB ifHnd)
-                     (interfaceEndPointIn $ ifHndInterface ifHnd)
-                     (devHndTimeout $ ifHndDevHnd ifHnd)
-                     ( USB.maxPacketSize . USB.endpointMaxPacketSize
-                     $ ifHndInEPDesc ifHnd
-                     )
-                     (drop 2 >> iter)
+enumReadFTDI :: MonadCatchIO m
+             => InterfaceHandle -> It.EnumeratorGM WrappedByteString Word8 m a
+enumReadFTDI ifHnd iter =
+    let endpointDesc = ifHndInEPDesc ifHnd
+    in USB.enumReadBulk (ifHndUSB ifHnd)
+                        (USB.endpointAddress endpointDesc)
+                        (devHndTimeout $ ifHndDevHnd ifHnd)
+                        (USB.maxPacketSize $ USB.endpointMaxPacketSize endpointDesc)
+                        (dropModemStatusBytes iter)
+
+dropModemStatusBytes :: Monad m
+                     => It.IterateeG WrappedByteString Word8 m a
+                     -> It.IterateeG WrappedByteString Word8 m a
+dropModemStatusBytes i1 = It.drop 2 >> It.IterateeG (liftM drp . It.runIter i1)
+    where
+      drp (It.Cont i2 mErr) = It.Cont (dropModemStatusBytes i2) mErr
+      drp done = done
+
 
 -------------------------------------------------------------------------------
 -- Control Requests
