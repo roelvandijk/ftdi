@@ -380,10 +380,10 @@ genControl usbCtrl index ifHnd request value =
 control :: InterfaceHandle -> RequestCode -> Word16 -> IO ()
 control = genControl USB.control 0
 
-readControl :: InterfaceHandle -> RequestCode -> Word16 -> USB.Size -> IO BS.ByteString
+readControl :: InterfaceHandle -> RequestCode -> Word16 -> USB.Size -> IO (BS.ByteString, Bool)
 readControl = genControl USB.readControl 0
 
-writeControl :: InterfaceHandle -> RequestCode -> Word16 -> BS.ByteString -> IO USB.Size
+writeControl :: InterfaceHandle -> RequestCode -> Word16 -> BS.ByteString -> IO (USB.Size, Bool)
 writeControl = genControl USB.writeControl 0
 
 -------------------------------------------------------------------------------
@@ -401,7 +401,7 @@ purgeWriteBuffer ifHnd = control ifHnd reqReset valPurgeWriteBuffer
 
 getLatencyTimer :: InterfaceHandle -> IO Word8
 getLatencyTimer ifHnd = do
-    bs <- readControl ifHnd reqGetLatencyTimer 0 1
+    (bs, _) <- readControl ifHnd reqGetLatencyTimer 0 1
     case BS.unpack bs of
       [b] -> return b
       _   -> error "System.FTDI.getLatencyTimer: failed"
@@ -411,7 +411,7 @@ setLatencyTimer ifHnd latency = control ifHnd reqSetLatencyTimer $ fromIntegral 
 
 pollModemStatus :: InterfaceHandle -> IO ModemStatus
 pollModemStatus ifHnd = do
-    bs <- readControl ifHnd reqPollModemStatus 0 2
+    (bs, _) <- readControl ifHnd reqPollModemStatus 0 2
     case BS.unpack bs of
       [x,y] -> return $ unmarshalModemStatus x y
       _     -> error "System.FTDI.pollModemStatus: failed"
