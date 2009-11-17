@@ -1,129 +1,177 @@
+{-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE UnicodeSyntax #-}
+
 module Main where
 
-import Control.Concurrent
 import Control.Monad
 import Data.Bits
+import Data.Time.Clock     ( getCurrentTime, diffUTCTime )
 import Data.Word
-import Data.Iteratee.Base ( IterateeG(..), IterGV(..), StreamG(..) )
+import Prelude.Unicode
+import Text.Printf         ( printf )
 import qualified Data.ByteString as BS
-import qualified System.USB      as USB
 import qualified System.FTDI     as FTDI
+import qualified System.USB      as USB
 
-main :: IO ()
-main = do ctx      <- USB.newCtx
-          devList  <- USB.getDevices ctx
-          descList <- mapM USB.getDeviceDesc devList
-          let xs :: [(USB.Device, USB.DeviceDesc)]
-              xs = filter (isFTDI . snd) $ zip devList descList
+main ∷ IO ()
+main = do ctx      ← USB.newCtx
+          devList  ← USB.getDevices ctx
+          descList ← mapM USB.getDeviceDesc devList
+          let xs ∷ [(USB.Device, USB.DeviceDesc)]
+              xs = filter (isFTDI ∘ snd) $ zip devList descList
           if not $ null xs
             then do let x = head xs
                     maybe (putStrLn "Unknown chip type")
-                          (\c -> withBLD =<< FTDI.fromUSBDevice (fst x) c)
+                          (\c → withBLD =<< FTDI.fromUSBDevice (fst x) c)
                           $ FTDI.guessChipType (snd x)
             else putStrLn "BLD not found :-("
 
-ftdi_vid :: USB.VendorId
+ftdi_vid ∷ USB.VendorId
 ftdi_vid = 0x0403
 
-ft2232h_pid :: USB.ProductId
+ft2232h_pid ∷ USB.ProductId
 ft2232h_pid = 0x6010
 
-isFTDI :: USB.DeviceDesc -> Bool
-isFTDI = (ftdi_vid ==) . USB.deviceVendorId
+isFTDI ∷ USB.DeviceDesc → Bool
+isFTDI = (ftdi_vid ≡) ∘ USB.deviceVendorId
 
-withBLD :: FTDI.Device -> IO ()
-withBLD dev = FTDI.withDeviceHandle dev $ \devHnd ->
-              FTDI.withInterface devHnd FTDI.Interface_A $ \ifHnd ->
-                do let ih = FTDI.ifHndUSB ifHnd
-                   FTDI.reset            ifHnd
-                   FTDI.setLatencyTimer  ifHnd 16
-
+withBLD ∷ FTDI.Device → IO ()
+withBLD dev = FTDI.withDeviceHandle dev $ \devHnd →
+              FTDI.withInterfaceHandle
+                      (devHnd {FTDI.devHndTimeout = timeout})
+                      FTDI.Interface_A $ \ifHnd →
+                do FTDI.reset            ifHnd
+                   FTDI.setLatencyTimer  ifHnd latency
                    FTDI.setBitMode ifHnd 0xff FTDI.BitMode_SyncFIFO
-                   FTDI.control ifHnd FTDI.reqSetBaudRate 0
 
-                   -- FTDI.setConfiguration ifHnd
-                   --                       0xff
-                   --                       FTDI.BitMode_SyncFIFO
-                   --                       (FTDI.maxBaudRate :: Double)
+                   (results, rest) ← readSomeBytes ifHnd numBytes numLoops
 
-                   let theByte = bld_encodeControl LogRatio
-                                                   False
-                                                   False
-                                                   False
-                                                   True
-                                                   Continuous
-                   USB.writeBulk
-                      ih
-                      (USB.EndpointAddress 2 :: USB.EndpointAddress USB.Out)
-                      timeout
-                      (BS.singleton theByte)
+                   let totalBytes = sum $ map fst results
+                       avgBytes = fromIntegral totalBytes ÷ numLoops
+                       times    = map snd results
+                       avgTime  = sum times ÷ numLoops
+                       minTime  = minimum times
+                       maxTime  = maximum times
 
-                   threadDelay 100000
+                   printf "Requested bytes: %i * %i = %i\n"
+                          (numLoops ∷ Int)
+                          numBytes
+                          (numLoops ⋅ numBytes ∷ Int)
+                   printf "Total bytes:                %i\n" totalBytes
+                   printf "Rest bytes:                 %i\n" rest
+                   printf "Avg bytes:                  %i\n" (floor avgBytes ∷ Int)
+                   printf "Minimum time:               %.3f seconds\n" minTime
+                   printf "Average time:               %.3f seconds\n" avgTime
+                   printf "Maximum time:               %.3f seconds\n" maxTime
+                   printf "Minimum samples per second: %i\n"
+                          (floor $ avgBytes ÷ 3 ÷ maxTime ∷ Int)
+                   printf "Average samples per second: %i\n"
+                          (floor $ avgBytes ÷ 3 ÷ avgTime ∷ Int)
+                   printf "Maximum samples per second: %i\n"
+                          (floor $ avgBytes ÷ 3 ÷ minTime ∷ Int)
+    where numLoops ∷ ∀ α. Num α ⇒ α
+          numLoops = 5
+          numBytes = 1000 ⋅ 1000 ⋅ 3 ⋅ 1
+          timeout  = 5000
+          latency  = 16
 
-                   let theByte = bld_encodeControl LogRatio
-                                                   False
-                                                   False
-                                                   False
-                                                   True
-                                                   NoSampling
+readSomeBytes ∷ FTDI.InterfaceHandle → Int → Int → IO ([(Int, Double)], Int)
+readSomeBytes ifHnd numBytes numLoops = do
+  let reader ∷ FTDI.ChunkedReader IO [BS.ByteString]
+      reader = FTDI.readData ifHnd numBytes
 
-                   USB.writeBulk
-                      ih
-                      (USB.EndpointAddress 2 :: USB.EndpointAddress USB.Out)
-                      timeout
-                      (BS.singleton theByte)
+      timedChunk ∷ BS.ByteString → IO ((Int, Double), BS.ByteString)
+      timedChunk rest = do
+        t1 ← getCurrentTime
+        start ifHnd
+        (packets, rest') ← FTDI.runChunkedReader reader rest
+        stop ifHnd
+        t2 ← getCurrentTime
 
-                   replicateM_ 1 $ do
-                     bytes <- USB.readBulk
-                                ih
-                                (USB.EndpointAddress 1 :: USB.EndpointAddress USB.In)
-                                timeout
-                                512
+        let totalBytes = sum $ map BS.length packets
+        -- printf "%i bytes in %i packets\n"
+        --        totalBytes
+        --        (length packets)
+        -- forM_ (zip packets [(1 ∷ Int)..]) $ \(p, n) →
+        --       do printf "packet %i\n" n
+        --          printPacket 66 p
+        -- printf "\n"
+        return $ ((totalBytes, realToFrac $ diffUTCTime t2 t1), rest')
 
-                     putStrLn $ "Read " ++ show (BS.length bytes) ++ " bytes"
-                     mapM_ print $ decodeVoltages bytes
+      readLoop ∷ ([(Int, Double)], BS.ByteString)
+               → Int
+               → IO ([(Int, Double)], BS.ByteString)
+      readLoop (acc, rest) _ = do (result, rest') ← timedChunk rest
+                                  return $ (result:acc, rest')
 
-                   let theByte = bld_encodeControl LogRatio
-                                                   False
-                                                   False
-                                                   False
-                                                   True
-                                                   NoSampling
-                   USB.writeBulk
-                      ih
-                      (USB.EndpointAddress 2 :: USB.EndpointAddress USB.Out)
-                      timeout
-                      (BS.singleton theByte)
+  (results, rest) ← foldM readLoop ([], BS.empty) [1 .. numLoops]
+  return (results, BS.length rest)
 
-                   return ()
+printPacket ∷ Int → BS.ByteString → IO ()
+printPacket n bs = forM_ (chunkify n $ BS.unpack bs)
+                 $ \row → do forM_ row $ printf "%02x "
+                             putStrLn ""
 
-baudRate3M :: Word16
-baudRate3M = 0
+sendBLDControlByte ∷ FTDI.InterfaceHandle → Word8 → IO ()
+sendBLDControlByte ih = ignore ∘ FTDI.writeBulk ih ∘ BS.singleton
 
-timeout :: Int
-timeout = 5000
+start ∷ FTDI.InterfaceHandle → IO ()
+start ih = sendBLDControlByte ih
+         $ bld_encodeControl LogRatio
+                             False
+                             False
+                             False
+                             True
+                             Continuous
+
+stop ∷ FTDI.InterfaceHandle → IO ()
+stop ih = sendBLDControlByte ih
+        $ bld_encodeControl LogRatio
+                            False
+                            False
+                            False
+                            True
+                            NoSampling
 
 -------------------------------------------------------------------------------
 
-decodeVoltages :: BS.ByteString -> [Double]
-decodeVoltages bs | BS.length bs < 5 = []
-                  | otherwise        = map (toVoltage . decodeSample)
-                                     . chunkify 3
-                                     . drop 2
-                                     $ BS.unpack bs
-    where
-      decodeSample :: [Word8] -> Word16
-      decodeSample xs | length xs /= 3 = 0
-                      | otherwise      = let [x, y, z] = xs
-                                             bits_0_5 = fromIntegral (x .&. 0x3f)
-                                             bits_6_a = fromIntegral (y .&. 0x1f)
-                                             bits_b_f = fromIntegral (z .&. 0x1f)
-                                         in     bits_0_5
-                                            .|. bits_6_a `shiftL` 6
-                                            .|. bits_b_f `shiftL` 11
+groupSamples ∷ [Word8] → [(Word8, Word8, Word8)]
+groupSamples bs = map extractSample ∘ chunkify 3 $ drop 2 bs
+          where
+            extractSample ∷ [Word8] → (Word8, Word8, Word8)
+            extractSample xs | length xs ≢ 3 = (0, 0, 0)
+                             | otherwise = let [x, y, z] = xs
+                                           in (x, y, z)
 
-      toVoltage :: Word16 -> Double
-      toVoltage w = (fromIntegral w * 4096) / 65535
+decodeSample ∷ (Word8, Word8, Word8) → Double
+decodeSample (x, y, z) = let bits_0_5 = fromIntegral (x .&. 0x3f)
+                             bits_6_a = fromIntegral (y .&. 0x1f)
+                             bits_b_f = fromIntegral (z .&. 0x1f)
+                             w16 ∷ Word16
+                             w16 =     bits_0_5
+                                   .|. bits_6_a `shiftL` 6
+                                   .|. bits_b_f `shiftL` 11
+                         in (fromIntegral w16 ⋅ 4096) ÷ 65535
+
+-- decodeVoltages ∷ BS.ByteString → [Double]
+-- decodeVoltages bs | BS.length bs < 5 = []
+--                   | otherwise        = map (toVoltage ∘ decodeSample)
+--                                      ∘ chunkify 3
+--                                      ∘ drop 2
+--                                      $ BS.unpack bs
+--     where
+--       decodeSample ∷ [Word8] → Word16
+--       decodeSample xs | length xs ≠ 3 = 0
+--                       | otherwise     = let [x, y, z] = xs
+--                                             bits_0_5 = fromIntegral (x .&. 0x3f)
+--                                             bits_6_a = fromIntegral (y .&. 0x1f)
+--                                             bits_b_f = fromIntegral (z .&. 0x1f)
+--                                         in     bits_0_5
+--                                            .|. bits_6_a `shiftL` 6
+--                                            .|. bits_b_f `shiftL` 11
+
+--       toVoltage ∷ Word16 → Double
+--       toVoltage w = (fromIntegral w ⋅ 4096) ÷ 65535
 
 -------------------------------------------------------------------------------
 -- BLD functions
@@ -137,47 +185,37 @@ data Sampling = NoSampling
               | Single
                 deriving (Enum, Show)
 
-bld_encodeControl :: InputChannel -> Bool -> Bool -> Bool -> Bool -> Sampling -> Word8
-bld_encodeControl chan out2 out3 out4 clearErr sampling = chanVal chan
-                                                        + digOutVal out2 2
-                                                        + digOutVal out3 3
-                                                        + digOutVal out4 4
-                                                        + digOutVal clearErr 5
-                                                        + genFromEnum sampling * 64
+bld_encodeControl ∷ InputChannel → Bool → Bool → Bool → Bool → Sampling → Word8
+bld_encodeControl chan out2 out3 out4 clearErr sampling
+  = chanVal chan
+    + digOutVal out2 2
+    + digOutVal out3 3
+    + digOutVal out4 4
+    + digOutVal clearErr 5
+    + genFromEnum sampling ⋅ 64
     where
       chanVal LogRatio  = 0
       chanVal CurrentD1 = 3
       chanVal CurrentD2 = 2
 
-      digOutVal :: Bool -> Int -> Word8
-      digOutVal False _ = 0
-      digOutVal True n  = 2 ^ n
+      digOutVal ∷ Bool → Int → Word8
+      digOutVal False _  = 0
+      digOutVal True  n  = 2 ^ n
 
 -------------------------------------------------------------------------------
 -- Miscellaneous
 
-genFromEnum :: (Enum e, Num n) => e -> n
-genFromEnum = fromIntegral . fromEnum
+genFromEnum ∷ (Enum e, Num n) ⇒ e → n
+genFromEnum = fromIntegral ∘ fromEnum
 
-ignore :: Monad m => m a -> m ()
+ignore ∷ Monad m ⇒ m α → m ()
 ignore = (>> return ())
 
-chunkify :: Int -> [a] -> [[a]]
+chunkify ∷ Int → [α] → [[α]]
 chunkify n = go
     where
       go [] = []
       go xs = let (a, b) = splitAt n xs
               in a : go b
 
--- prop_concat n xs = n > 0 ==>
---                    xs == concat $ chunkify n xs
-
--- prop_tranpose xs = not (null xs) ==>
---                    xs == (fst $ transpose $ chunkify 1 xs)
-
--- prop_length n xs = n > 0 ==>
---                    divRoundUp (length xs) n == length (chunkify n xs)
-
--- divRoundUp x y = let (d, m) = x `divMod` y
---                  in d + signum m
 

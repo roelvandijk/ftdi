@@ -15,23 +15,32 @@ flag example
   description: Build an example program
   default:     True
 
--- Library
---   exposed-modules: System.FTDI
---   build-depends: base >= 3.0.3.1 && < 4.2
---                , usb == 0.1.*
+Library
+  exposed-modules: System.FTDI
+  build-depends: base                      >= 4       && < 4.2
+               , bytestring                >= 0.9.1.4 && < 0.10
+               , safe                      == 0.2.*
+               , time                      >= 1.1.4   && < 1.2
+               , transformers              >= 0.1.4   && < 0.2
+               , unicode-symbols           == 0.1.*
+               , usb                       == 0.3.*
+               , containers
+  ghc-options: -Wall
 
 executable example
   main-is: example.hs
-
   build-depends: base                      >= 4       && < 4.2
                , bytestring                >= 0.9.1.4 && < 0.10
-               , iteratee                  >= 0.2.4   && < 0.3
-               , MonadCatchIO-transformers >= 0.0.1   && < 0.1
                , safe                      == 0.2.*
+               , time                      >= 1.1.4   && < 1.2
                , transformers              >= 0.1.4   && < 0.2
+               , unicode-symbols           == 0.1.*
                , usb                       == 0.3.*
+               , containers
+  ghc-options: -Wall
 
   if flag(example)
     buildable: True
   else
     buildable: False
+
