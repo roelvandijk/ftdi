@@ -4,6 +4,8 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE UnicodeSyntax #-}
 
+{-# LANGUAGE PackageImports #-}
+
 module System.FTDI
     ( ChipType(..)
     , Parity(..)
@@ -14,6 +16,8 @@ module System.FTDI
 
       -- *Devices
     , Device
+    , getChipType
+    , setChipType
     , fromUSBDevice
     , guessChipType
 
@@ -22,6 +26,8 @@ module System.FTDI
 
       -- *Device handles
     , DeviceHandle
+    , setTimeout
+    , getTimeout
     , openDevice
     , closeDevice
     , withDeviceHandle
@@ -32,12 +38,12 @@ module System.FTDI
     , closeInterface
     , withInterfaceHandle
 
-      -- *Reading data
+      -- *Data transfer
     , ChunkedReader
     , runChunkedReader
     , readData
 
-      -- *Bulk transfers (low level)
+      -- **Low level bulk transfers
     , readBulk
     , writeBulk
 
@@ -51,6 +57,11 @@ module System.FTDI
     , setBitMode
     , setLineProperty
 
+      -- ** Low level
+    , control
+    , readControl
+    , writeControl
+
       -- *Flow control
     , FlowCtrl(..)
     , setFlowControl
@@ -61,15 +72,18 @@ module System.FTDI
 
       -- *Constants
     , maxBaudRate
+
+      -- *Defaults
     , defaultTimeout
     ) where
 
-import Prelude hiding ( drop )
 import Prelude.Unicode
 
 import Control.Exception              ( Exception, bracket, throwIO )
 import Control.Monad                  ( liftM, liftM2 )
-import Control.Monad.Trans            ( MonadTrans, MonadIO
+-- TODO: package import purely for GHCI and flymake; remove in distro
+import "transformers" Control.Monad.Trans
+                                      ( MonadTrans, MonadIO
                                       , liftIO
                                       )
 import Control.Monad.Trans.State      ( StateT, get, put, runStateT )
@@ -80,7 +94,6 @@ import Data.Bits                      ( Bits, (.|.), (.&.)
 import Data.Data                      ( Data )
 import Data.Function                  ( on )
 import Data.List                      ( minimumBy )
-
 import Data.Typeable                  ( Typeable )
 import Data.Word                      ( Word8, Word16 )
 
@@ -140,12 +153,6 @@ data FlowCtrl = RTS_CTS -- Request-To-Send / Clear-To-Send
               | DTR_DSR -- Data-Terminal-Ready / Data-Set-Ready
               | XOnXOff -- Transmitter on / transmitter off
 
-data Interface = Interface_A
-               | Interface_B
-               | Interface_C
-               | Interface_D
-                 deriving (Enum, Eq, Ord, Show, Data, Typeable)
-
 type RequestCode  = Word8
 type RequestValue = Word16
 
@@ -164,30 +171,7 @@ data ModemStatus = ModemStatus
     , msErrorInReceiverFIFO        ∷ Bool
     } deriving (Eq, Ord, Show, Data, Typeable)
 
-data Device = Device
-    { devUSB      ∷ USB.Device
-    , devUSBDesc  ∷ USB.DeviceDesc
-    , devUSBConf  ∷ USB.ConfigDesc
-    , devChipType ∷ ChipType
-    }
-
-data DeviceHandle = DeviceHandle
-    { devHndUSB     ∷ USB.DeviceHandle
-    , devHndDev     ∷ Device
-    , devHndTimeout ∷ Int
-    }
-
-data InterfaceHandle = InterfaceHandle
-    { ifHndUSB       ∷ USB.InterfaceHandle
-    , ifHndDevHnd    ∷ DeviceHandle
-    , ifHndInterface ∷ Interface
-    , ifHndInEPDesc  ∷ USB.EndpointDesc USB.In
-    , ifHndOutEPDesc ∷ USB.EndpointDesc USB.Out
-    }
-
-data FTDIException = InterfaceInUse
-                   | InterfaceNotFound
-                     deriving (Show, Data, Typeable)
+data FTDIException = InterfaceNotFound deriving (Show, Data, Typeable)
 
 instance Exception FTDIException
 
@@ -291,37 +275,29 @@ unmarshalModemStatus a b =
                 }
 
 marshalModemStatus ∷ ModemStatus → (Word8, Word8)
-marshalModemStatus ms = let a = setBitIf 4 (msClearToSend             ms)
-                              $ setBitIf 5 (msDataSetReady            ms)
-                              $ setBitIf 6 (msRingIndicator           ms)
-                              $ setBitIf 7 (msReceiveLineSignalDetect ms)
-                              $ 0
-                            b = setBitIf 0 (msDataReady                  ms)
-                              $ setBitIf 1 (msOverrunError               ms)
-                              $ setBitIf 2 (msParityError                ms)
-                              $ setBitIf 3 (msFramingError               ms)
-                              $ setBitIf 4 (msBreakInterrupt             ms)
-                              $ setBitIf 5 (msTransmitterHoldingRegister ms)
-                              $ setBitIf 6 (msTransmitterEmpty           ms)
-                              $ setBitIf 7 (msErrorInReceiverFIFO        ms)
-                              $ 0
-                        in (a, b)
+marshalModemStatus ms = (a, b)
     where
-      setBitIf ∷ Int → Bool → Word8 → Word8
-      setBitIf ix True  val = setBit val ix
-      setBitIf _  False val = val
+      a = mkByte $ zip [4..]
+                       [ msClearToSend
+                       , msDataSetReady
+                       , msRingIndicator
+                       , msReceiveLineSignalDetect
+                       ]
+      b = mkByte $ zip [0..]
+                       [ msDataReady
+                       , msOverrunError
+                       , msParityError
+                       , msFramingError
+                       , msBreakInterrupt
+                       , msTransmitterHoldingRegister
+                       , msTransmitterEmpty
+                       , msErrorInReceiverFIFO
+                       ]
 
-interfaceIndex ∷ Interface → Word16
-interfaceIndex = (+ 1) ∘ genFromEnum
-
-interfaceToUSB ∷ Interface → USB.InterfaceNumber
-interfaceToUSB = genFromEnum
-
-interfaceEndPointIn ∷ Interface → USB.EndpointAddress USB.In
-interfaceEndPointIn i = USB.EndpointAddress $ 1 + 2 ⋅ genFromEnum i
-
-interfaceEndPointOut ∷ Interface → USB.EndpointAddress USB.Out
-interfaceEndPointOut i = USB.EndpointAddress $ 2 + 2 ⋅ genFromEnum i
+      mkByte ∷ [(Int, ModemStatus → Bool)] → Word8
+      mkByte ts = foldr (\(n, f) x → if f ms then setBit x n else x)
+                        0
+                        ts
 
 supportedSubDivisors ∷ ChipType → [Int]
 supportedSubDivisors ChipType_AM = [0, 1, 2, 4]
@@ -330,6 +306,19 @@ supportedSubDivisors _           = [0..7]
 -------------------------------------------------------------------------------
 -- Devices
 -------------------------------------------------------------------------------
+
+data Device = Device
+    { devUSB      ∷ USB.Device
+    , devUSBDesc  ∷ USB.DeviceDesc
+    , devUSBConf  ∷ USB.ConfigDesc
+    , devChipType ∷ ChipType
+    }
+
+getChipType ∷ Device → ChipType
+getChipType = devChipType
+
+setChipType ∷ Device → ChipType → Device
+setChipType dev ct = dev {devChipType = ct}
 
 fromUSBDevice ∷ USB.Device → ChipType → IO Device
 fromUSBDevice dev chip = do
@@ -355,16 +344,50 @@ guessChipType desc = case USB.deviceReleaseNumber desc of
                        _         → Nothing
 
 -------------------------------------------------------------------------------
+-- Interfaces
+-------------------------------------------------------------------------------
+
+data Interface = Interface_A
+               | Interface_B
+               | Interface_C
+               | Interface_D
+                 deriving (Enum, Eq, Ord, Show, Data, Typeable)
+
+interfaceIndex ∷ Interface → Word16
+interfaceIndex = (+ 1) ∘ genFromEnum
+
+interfaceToUSB ∷ Interface → USB.InterfaceNumber
+interfaceToUSB = genFromEnum
+
+interfaceEndPointIn ∷ Interface → USB.EndpointAddress USB.In
+interfaceEndPointIn i = USB.EndpointAddress $ 1 + 2 ⋅ genFromEnum i
+
+interfaceEndPointOut ∷ Interface → USB.EndpointAddress USB.Out
+interfaceEndPointOut i = USB.EndpointAddress $ 2 + 2 ⋅ genFromEnum i
+
+-------------------------------------------------------------------------------
 -- Device Handles
 -------------------------------------------------------------------------------
+
+data DeviceHandle = DeviceHandle
+    { devHndUSB     ∷ USB.DeviceHandle
+    , devHndDev     ∷ Device
+    , devHndTimeout ∷ Int
+    }
+
+getTimeout ∷ DeviceHandle → Int
+getTimeout = devHndTimeout
+
+setTimeout ∷ DeviceHandle → Int → DeviceHandle
+setTimeout devHnd timeout = devHnd {devHndTimeout = timeout}
 
 openDevice ∷ Device → IO DeviceHandle
 openDevice dev = do
   handle ← USB.openDevice $ devUSB dev
   USB.setConfig handle $ USB.configValue $ devUSBConf dev
-  return DeviceHandle { devHndUSB       = handle
-                      , devHndDev       = dev
-                      , devHndTimeout   = defaultTimeout
+  return DeviceHandle { devHndUSB     = handle
+                      , devHndDev     = dev
+                      , devHndTimeout = defaultTimeout
                       }
 
 closeDevice ∷ DeviceHandle → IO ()
@@ -377,17 +400,25 @@ withDeviceHandle dev = bracket (openDevice dev) closeDevice
 -- Interface Handles
 -------------------------------------------------------------------------------
 
+data InterfaceHandle = InterfaceHandle
+    { ifHndUSB       ∷ USB.InterfaceHandle
+    , ifHndDevHnd    ∷ DeviceHandle
+    , ifHndInterface ∷ Interface
+    , ifHndInEPDesc  ∷ USB.EndpointDesc USB.In
+    , ifHndOutEPDesc ∷ USB.EndpointDesc USB.Out
+    }
+
 openInterface ∷ DeviceHandle → Interface → IO InterfaceHandle
 openInterface devHnd i = do
   usbIfHnd ← USB.claimInterface (devHndUSB devHnd) (interfaceToUSB i)
   maybe (throwIO InterfaceNotFound)
         (\(inEP, outEP) →
              return InterfaceHandle
-                        { ifHndUSB              = usbIfHnd
-                        , ifHndDevHnd           = devHnd
-                        , ifHndInterface        = i
-                        , ifHndInEPDesc         = inEP
-                        , ifHndOutEPDesc        = outEP
+                        { ifHndUSB       = usbIfHnd
+                        , ifHndDevHnd    = devHnd
+                        , ifHndInterface = i
+                        , ifHndInEPDesc  = inEP
+                        , ifHndOutEPDesc = outEP
                         }
         )
         $ liftM2 (,)  mInEP mOutEP
@@ -402,10 +433,10 @@ closeInterface ifHnd = let usbIfHnd = ifHndUSB ifHnd
                        in USB.releaseInterface usbIfHnd
 
 withInterfaceHandle ∷ DeviceHandle → Interface → (InterfaceHandle → IO α) → IO α
-withInterfaceHandle h c = bracket (openInterface h c) closeInterface
+withInterfaceHandle h i = bracket (openInterface h i) closeInterface
 
 -------------------------------------------------------------------------------
--- Bulk transfers
+-- Data transfer
 -------------------------------------------------------------------------------
 
 newtype ChunkedReader m α = ChunkedReader {unCR ∷ StateT ByteString m α}
@@ -426,8 +457,6 @@ readData ifHnd numBytes = ChunkedReader $
          else let (bs, newRest) = BS.splitAt numBytes prevRest
               in put newRest >> return [bs]
     where
-      -- Best case:  1 iteration
-      -- Worst case: ∞ iterations (need some kind of custom timeout for this case)
       readLoop ∷ Int → StateT ByteString m [ByteString]
       readLoop remaining = do
         -- Amount of bytes we need to request in order to get atleast
@@ -442,12 +471,10 @@ readData ifHnd numBytes = ChunkedReader $
         -- could be either a USB timeout or the FTDI latency timer firing.
         --
         -- In case of a USB timeout:
-        --   ∀ (n ∷ Int). n ≥ 1 ∧ BS.length bytes ≡ n ⋅ packetSize
+        --   ∃ (n : Nat). receivedBytes ≡ n ⋅ packetSize
         --
         -- In case of FTDI latency timer:
-        --   BS.length bytes < packetSize
-        --   (Not entirely sure this is correct. Could also be limited to the
-        --   FTDI buffer size)
+        --   receivedBytes < packetSize
         if receivedDataBytes < remaining
           then let xs = splitPackets packetSize bytes
                in liftM (xs ++) (readLoop $ remaining - receivedDataBytes)
@@ -544,7 +571,8 @@ getLatencyTimer ifHnd = do
       _   → error "System.FTDI.getLatencyTimer: failed"
 
 setLatencyTimer ∷ InterfaceHandle → Word8 → IO ()
-setLatencyTimer ifHnd latency = control ifHnd reqSetLatencyTimer $ fromIntegral latency
+setLatencyTimer ifHnd latency = control ifHnd reqSetLatencyTimer
+                                        $ fromIntegral latency
 
 pollModemStatus ∷ InterfaceHandle → IO ModemStatus
 pollModemStatus ifHnd = do
@@ -677,18 +705,6 @@ atLeast = max
 
 atMost ∷ Ord α ⇒ α → α → α
 atMost = min
-
-splitChunk ∷ Int → [ByteString] → ([ByteString], [ByteString])
-splitChunk = go []
-    where
-      go ∷ [ByteString] -> Int → [ByteString] → ([ByteString], [ByteString])
-      go acc _ [] = (reverse acc, [])
-      go acc n (x:xs)
-          | lx ≡ n    = (reverse $ x:acc, xs)
-          | lx > n    = let (a, b) = BS.splitAt n x
-                        in (reverse $ a:acc, b:xs)
-          | otherwise = go (x:acc) (n - lx) xs
-          where lx = BS.length x
 
 prop_divRndUp_min ∷ Integral α ⇒ α → α → Bool
 prop_divRndUp_min x y = let d = divRndUp x y

@@ -11,10 +11,6 @@ license-file:  LICENSE
 synopsis:      A thin layer over USB to communicate with FTDI chips
 category:      System
 
-flag example
-  description: Build an example program
-  default:     True
-
 Library
   exposed-modules: System.FTDI
   build-depends: base                      >= 4       && < 4.2
@@ -26,21 +22,3 @@ Library
                , usb                       == 0.3.*
                , containers
   ghc-options: -Wall
-
-executable example
-  main-is: example.hs
-  build-depends: base                      >= 4       && < 4.2
-               , bytestring                >= 0.9.1.4 && < 0.10
-               , safe                      == 0.2.*
-               , time                      >= 1.1.4   && < 1.2
-               , transformers              >= 0.1.4   && < 0.2
-               , unicode-symbols           == 0.1.*
-               , usb                       == 0.3.*
-               , containers
-  ghc-options: -Wall
-
-  if flag(example)
-    buildable: True
-  else
-    buildable: False
-
