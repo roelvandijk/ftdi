@@ -34,6 +34,8 @@ module System.FTDI
 
       -- *Interface handles
     , InterfaceHandle
+    , getDeviceHandle
+    , getInterface
     , openInterface
     , closeInterface
     , withInterfaceHandle
@@ -79,6 +81,7 @@ module System.FTDI
 
 import Prelude.Unicode
 
+import Control.Applicative            ( (<$>) )
 import Control.Exception              ( Exception, bracket, throwIO )
 import Control.Monad                  ( liftM, liftM2 )
 -- TODO: package import purely for GHCI and flymake; remove in distro
@@ -93,7 +96,7 @@ import Data.Bits                      ( Bits, (.|.), (.&.)
                                       )
 import Data.Data                      ( Data )
 import Data.Function                  ( on )
-import Data.List                      ( minimumBy )
+import Data.List                      ( minimumBy, partition )
 import Data.Typeable                  ( Typeable )
 import Data.Word                      ( Word8, Word16 )
 
@@ -309,7 +312,6 @@ supportedSubDivisors _           = [0..7]
 
 data Device = Device
     { devUSB      ∷ USB.Device
-    , devUSBDesc  ∷ USB.DeviceDesc
     , devUSBConf  ∷ USB.ConfigDesc
     , devChipType ∷ ChipType
     }
@@ -320,15 +322,12 @@ getChipType = devChipType
 setChipType ∷ Device → ChipType → Device
 setChipType dev ct = dev {devChipType = ct}
 
-fromUSBDevice ∷ USB.Device → ChipType → IO Device
-fromUSBDevice dev chip = do
-  desc ← USB.getDeviceDesc dev
-  conf ← USB.getConfigDesc dev 0
-  return Device { devUSB      = dev
-                , devUSBDesc  = desc
-                , devUSBConf  = conf
-                , devChipType = chip
-                }
+fromUSBDevice ∷ USB.Device → ChipType → Device
+fromUSBDevice dev chip =
+  Device { devUSB      = dev
+         , devUSBConf  = head ∘ USB.deviceConfigs $ USB.deviceDesc dev
+         , devChipType = chip
+         }
 
 guessChipType ∷ USB.DeviceDesc → Maybe ChipType
 guessChipType desc = case USB.deviceReleaseNumber desc of
@@ -359,11 +358,17 @@ interfaceIndex = (+ 1) ∘ genFromEnum
 interfaceToUSB ∷ Interface → USB.InterfaceNumber
 interfaceToUSB = genFromEnum
 
-interfaceEndPointIn ∷ Interface → USB.EndpointAddress USB.In
-interfaceEndPointIn i = USB.EndpointAddress $ 1 + 2 ⋅ genFromEnum i
+interfaceEndPointIn ∷ Interface → USB.EndpointAddress
+interfaceEndPointIn i =
+    USB.EndpointAddress { USB.endpointNumber    = 1 + 2 ⋅ genFromEnum i
+                        , USB.transferDirection = USB.In
+                        }
 
-interfaceEndPointOut ∷ Interface → USB.EndpointAddress USB.Out
-interfaceEndPointOut i = USB.EndpointAddress $ 2 + 2 ⋅ genFromEnum i
+interfaceEndPointOut ∷ Interface → USB.EndpointAddress
+interfaceEndPointOut i =
+    USB.EndpointAddress { USB.endpointNumber    = 2 + 2 ⋅ genFromEnum i
+                        , USB.transferDirection = USB.Out
+                        }
 
 -------------------------------------------------------------------------------
 -- Device Handles
@@ -401,36 +406,45 @@ withDeviceHandle dev = bracket (openDevice dev) closeDevice
 -------------------------------------------------------------------------------
 
 data InterfaceHandle = InterfaceHandle
-    { ifHndUSB       ∷ USB.InterfaceHandle
-    , ifHndDevHnd    ∷ DeviceHandle
+    { ifHndDevHnd    ∷ DeviceHandle
     , ifHndInterface ∷ Interface
-    , ifHndInEPDesc  ∷ USB.EndpointDesc USB.In
-    , ifHndOutEPDesc ∷ USB.EndpointDesc USB.Out
+    , ifHndInEPDesc  ∷ USB.EndpointDesc
+    , ifHndOutEPDesc ∷ USB.EndpointDesc
     }
 
+getDeviceHandle ∷ InterfaceHandle → DeviceHandle
+getDeviceHandle = ifHndDevHnd
+
+getInterface ∷ InterfaceHandle → Interface
+getInterface = ifHndInterface
+
 openInterface ∷ DeviceHandle → Interface → IO InterfaceHandle
-openInterface devHnd i = do
-  usbIfHnd ← USB.claimInterface (devHndUSB devHnd) (interfaceToUSB i)
-  maybe (throwIO InterfaceNotFound)
-        (\(inEP, outEP) →
-             return InterfaceHandle
-                        { ifHndUSB       = usbIfHnd
-                        , ifHndDevHnd    = devHnd
-                        , ifHndInterface = i
-                        , ifHndInEPDesc  = inEP
-                        , ifHndOutEPDesc = outEP
-                        }
-        )
-        $ liftM2 (,)  mInEP mOutEP
-    where conf = devUSBConf $ devHndDev devHnd
-          ifIx = fromEnum i
-          mIfDesc = headMay =<< USB.configInterfaces conf `atMay` ifIx
-          mInEP   = headMay ∘ USB.interfaceInEndpoints  =<< mIfDesc
-          mOutEP  = headMay ∘ USB.interfaceOutEndpoints =<< mIfDesc
+openInterface devHnd i =
+    let conf    = devUSBConf $ devHndDev devHnd
+        ifIx    = fromEnum i
+        mIfDesc = headMay =<< USB.configInterfaces conf `atMay` ifIx
+        mInOutEps = partition ((USB.In ≡) ∘ USB.transferDirection ∘ USB.endpointAddress)
+                    ∘ USB.interfaceEndpoints
+                    <$> mIfDesc
+        mInEp   = headMay ∘ fst =<< mInOutEps
+        mOutEp  = headMay ∘ snd =<< mInOutEps
+    in maybe (throwIO InterfaceNotFound)
+             ( \ifHnd → do USB.claimInterface (devHndUSB devHnd) (interfaceToUSB i)
+                           return ifHnd
+             )
+             $ do inEp  ← mInEp
+                  outEp ← mOutEp
+                  return InterfaceHandle
+                     { ifHndDevHnd    = devHnd
+                     , ifHndInterface = i
+                     , ifHndInEPDesc  = inEp
+                     , ifHndOutEPDesc = outEp
+                     }
 
 closeInterface ∷ InterfaceHandle → IO ()
-closeInterface ifHnd = let usbIfHnd = ifHndUSB ifHnd
-                       in USB.releaseInterface usbIfHnd
+closeInterface ifHnd =
+    USB.releaseInterface (devHndUSB $ ifHndDevHnd ifHnd)
+                         (interfaceToUSB $ ifHndInterface ifHnd)
 
 withInterfaceHandle ∷ DeviceHandle → Interface → (InterfaceHandle → IO α) → IO α
 withInterfaceHandle h i = bracket (openInterface h i) closeInterface
@@ -497,14 +511,14 @@ readData ifHnd numBytes = ChunkedReader $
 
 readBulk ∷ InterfaceHandle → Int → IO (ByteString, Bool)
 readBulk ifHnd numBytes =
-    USB.readBulk (ifHndUSB ifHnd)
+    USB.readBulk (devHndUSB $ ifHndDevHnd ifHnd)
                  (interfaceEndPointIn $ ifHndInterface ifHnd)
                  (devHndTimeout $ ifHndDevHnd ifHnd)
                  numBytes
 
 writeBulk ∷ InterfaceHandle → ByteString → IO (Int, Bool)
 writeBulk ifHnd bs =
-    USB.writeBulk (ifHndUSB ifHnd)
+    USB.writeBulk (devHndUSB $ ifHndDevHnd ifHnd)
                   (interfaceEndPointOut $ ifHndInterface ifHnd)
                   (devHndTimeout $ ifHndDevHnd ifHnd)
                   bs
