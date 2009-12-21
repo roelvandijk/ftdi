@@ -13,12 +13,11 @@ category:      System
 
 Library
   exposed-modules: System.FTDI
-  build-depends: base                      >= 4       && < 4.2
-               , bytestring                >= 0.9.1.4 && < 0.10
-               , safe                      == 0.2.*
-               , time                      >= 1.1.4   && < 1.2
-               , transformers              >= 0.1.4   && < 0.2
-               , unicode-symbols           == 0.1.*
-               , usb                       == 0.3.*
-               , containers
+  build-depends: base                 >= 4       && < 4.2
+               , base-unicode-symbols == 0.1.*
+               , bytestring           >= 0.9.1.4 && < 0.10
+               , safe                 == 0.2.*
+               , time                 >= 1.1.4   && < 1.2
+               , transformers         >= 0.1.4   && < 0.2
+               , usb                  == 0.3.*
   ghc-options: -Wall
