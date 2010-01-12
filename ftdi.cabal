@@ -11,13 +11,12 @@ license-file:  LICENSE
 synopsis:      A thin layer over USB to communicate with FTDI chips
 category:      System
 
-Library
+library
   exposed-modules: System.FTDI
   build-depends: base                 >= 4       && < 4.2
-               , base-unicode-symbols == 0.1.*
+               , base-unicode-symbols >= 0.1.1   && < 0.2
                , bytestring           >= 0.9.1.4 && < 0.10
                , safe                 == 0.2.*
-               , time                 >= 1.1.4   && < 1.2
                , transformers         >= 0.1.4   && < 0.2
                , usb                  == 0.3.*
   ghc-options: -Wall

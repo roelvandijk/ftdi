@@ -1,18 +1,12 @@
 {-# LANGUAGE DeriveDataTypeable #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
+{-# LANGUAGE NoImplicitPrelude #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE UnicodeSyntax #-}
 
-{-# LANGUAGE PackageImports #-}
-
 module System.FTDI
     ( ChipType(..)
-    , Parity(..)
-    , BitDataFormat(..)
-    , StopBits(..)
-    , BitMode(..)
-    , ModemStatus(..)
 
       -- *Devices
     , Device
@@ -26,8 +20,9 @@ module System.FTDI
 
       -- *Device handles
     , DeviceHandle
-    , setTimeout
+    , resetUSB
     , getTimeout
+    , setTimeout
     , openDevice
     , closeDevice
     , withDeviceHandle
@@ -46,6 +41,16 @@ module System.FTDI
     , readData
 
       -- **Low level bulk transfers
+      -- |These are low-level functions and as such they ignores things like:
+      --
+      --   * Max packet size
+      --
+      --   * Latency timer
+      --
+      --   * Modem status bytes
+      --
+      -- USB timeouts are not ignored, but they will prevent the request
+      -- from being completed.
     , readBulk
     , writeBulk
 
@@ -55,9 +60,18 @@ module System.FTDI
     , purgeWriteBuffer
     , getLatencyTimer
     , setLatencyTimer
-    , pollModemStatus
+    , BitMode(..)
     , setBitMode
+
+      -- **Line properties
+    , Parity(..)
+    , BitDataFormat(..)
+    , StopBits(..)
     , setLineProperty
+
+      -- **Modem status
+    , ModemStatus(..)
+    , pollModemStatus
 
       -- ** Low level
     , control
@@ -77,36 +91,74 @@ module System.FTDI
 
       -- *Defaults
     , defaultTimeout
+
+      -- *Miscellaneous
+    , calcBaudRateDivisors
     ) where
 
-import Prelude.Unicode
 
-import Control.Applicative            ( (<$>) )
-import Control.Exception              ( Exception, bracket, throwIO )
-import Control.Monad                  ( liftM, liftM2 )
--- TODO: package import purely for GHCI and flymake; remove in distro
-import "transformers" Control.Monad.Trans
-                                      ( MonadTrans, MonadIO
-                                      , liftIO
-                                      )
-import Control.Monad.Trans.State      ( StateT, get, put, runStateT )
-import Data.Bits                      ( Bits, (.|.), (.&.)
-                                      , complement, setBit
-                                      , shiftL, testBit
-                                      )
-import Data.Data                      ( Data )
-import Data.Function                  ( on )
-import Data.List                      ( minimumBy, partition )
-import Data.Typeable                  ( Typeable )
-import Data.Word                      ( Word8, Word16 )
+-------------------------------------------------------------------------------
+-- Imports
+-------------------------------------------------------------------------------
 
-import Safe                           ( atMay, headMay )
+-- base
+import Control.Applicative       ( (<$>) )
+import Control.Exception         ( Exception, bracket, throwIO )
+import Control.Monad             ( Monad, (>>=), (>>), (=<<), return, fail
+                                 , liftM, liftM2
+                                 )
+import Data.Bool                 ( Bool, otherwise )
+import Data.Bits                 ( Bits, (.|.), (.&.)
+                                 , complement, setBit
+                                 , shiftL, testBit
+                                 )
+import Data.Data                 ( Data )
+import Data.Eq                   ( Eq, (==) )
+import Data.Function             ( ($), on )
+import Data.Int                  ( Int )
+import Data.List                 ( foldr, head, minimumBy, partition, zip )
+import Data.Maybe                ( Maybe(Just, Nothing), maybe )
+import Data.Ord                  ( Ord, (<), (>), compare, min, max )
+import Data.Tuple                ( fst, snd )
+import Data.Typeable             ( Typeable )
+import Data.Word                 ( Word8, Word16 )
+import Prelude                   ( Enum, succ
+                                 , Num, (+), (-), Integral, (^)
+                                 , RealFrac
+                                 , fromEnum, fromInteger, fromIntegral
+                                 , abs, realToFrac, floor
+                                 , mod, div, error
+                                 )
+import System.IO                 ( IO )
+import Text.Show                 ( Show )
 
-import Data.ByteString ( ByteString )
+-- base-unicode-symbols
+import Data.Bool.Unicode         ( (∧) )
+import Data.Eq.Unicode           ( (≡) )
+import Data.Function.Unicode     ( (∘) )
+import Data.Monoid.Unicode       ( (⊕) )
+import Data.Ord.Unicode          ( (≤), (≥) )
+import Prelude.Unicode           ( (⋅), (÷) )
+
+-- bytestring
 import qualified Data.ByteString          as BS
 import qualified Data.ByteString.Internal as BSI
-import qualified System.USB               as USB
+import Data.ByteString           ( ByteString )
 
+-- safe
+import Safe                      ( atMay, headMay )
+
+-- transformers
+import Control.Monad.Trans       ( MonadTrans, MonadIO, liftIO )
+import Control.Monad.Trans.State ( StateT, get, put, runStateT )
+
+-- usb
+import qualified System.USB as USB
+
+
+-------------------------------------------------------------------------------
+--
+-------------------------------------------------------------------------------
 
 data ChipType = ChipType_AM
               | ChipType_BM
@@ -116,67 +168,17 @@ data ChipType = ChipType_AM
               | ChipType_4232H
                 deriving (Enum, Eq, Ord, Show, Data, Typeable)
 
-data Parity =
-            -- |The parity bit is set to one if the number of ones in a given
-            -- set of bits is even (making the total number of ones, including
-            -- the parity bit, odd).
-              Parity_Odd
-            -- |The parity bit is set to one if the number of ones in a given
-            -- set of bits is odd (making the total number of ones, including
-            -- the parity bit, even).
-            | Parity_Even
-            | Parity_Mark  -- ^The parity bit is always 1.
-            | Parity_Space -- ^The parity bit is always 0.
-              deriving (Enum, Eq, Ord, Show, Data, Typeable)
-
-data BitDataFormat = Bits_7
-                   | Bits_8
-
-data StopBits = StopBit_1
-              | StopBit_15
-              | StopBit_2
-                deriving (Enum)
-
-data BitMode = BitMode_Reset
-             | BitMode_BitBang
-               -- |Multi-Protocol Synchronous Serial Engine
-             | BitMode_MPSSE
-               -- |Synchronous Bit-Bang Mode
-             | BitMode_SyncBitBang
-               -- |MCU Host Bus Emulation Mode
-             | BitMode_MCU
-               -- |Fast Opto-Isolated Serial Interface Mode
-             | BitMode_Opto
-             | BitMode_CBus
-               -- |Single Channel Synchronous 245 FIFO Mode
-             | BitMode_SyncFIFO
-              deriving (Eq, Ord, Show, Data, Typeable)
-
-data FlowCtrl = RTS_CTS -- Request-To-Send / Clear-To-Send
-              | DTR_DSR -- Data-Terminal-Ready / Data-Set-Ready
-              | XOnXOff -- Transmitter on / transmitter off
+data FlowCtrl = RTS_CTS -- ^Request-To-Send \/ Clear-To-Send
+              | DTR_DSR -- ^Data-Terminal-Ready \/ Data-Set-Ready
+              | XOnXOff -- ^Transmitter on \/ Transmitter off
 
 type RequestCode  = Word8
 type RequestValue = Word16
 
-data ModemStatus = ModemStatus
-    { msClearToSend                ∷ Bool
-    , msDataSetReady               ∷ Bool
-    , msRingIndicator              ∷ Bool
-    , msReceiveLineSignalDetect    ∷ Bool
-    , msDataReady                  ∷ Bool
-    , msOverrunError               ∷ Bool
-    , msParityError                ∷ Bool
-    , msFramingError               ∷ Bool
-    , msBreakInterrupt             ∷ Bool
-    , msTransmitterHoldingRegister ∷ Bool
-    , msTransmitterEmpty           ∷ Bool
-    , msErrorInReceiverFIFO        ∷ Bool
-    } deriving (Eq, Ord, Show, Data, Typeable)
-
 data FTDIException = InterfaceNotFound deriving (Show, Data, Typeable)
 
 instance Exception FTDIException
+
 
 -------------------------------------------------------------------------------
 -- Constants
@@ -235,6 +237,7 @@ valSetDTRLow  = 0x0100
 valSetRTSHigh = 0x0202
 valSetRTSLow  = 0x0200
 
+
 -------------------------------------------------------------------------------
 -- Defaults
 -------------------------------------------------------------------------------
@@ -244,63 +247,12 @@ defaultTimeout = 5000
 
 -------------------------------------------------------------------------------
 
-marshalBitMode ∷ BitMode → Word8
-marshalBitMode bm = case bm of
-                      BitMode_Reset       → 0x00
-                      BitMode_BitBang     → 0x01
-                      BitMode_MPSSE       → 0x02
-                      BitMode_SyncBitBang → 0x04
-                      BitMode_MCU         → 0x08
-                      BitMode_Opto        → 0x10
-                      BitMode_CBus        → 0x20
-                      BitMode_SyncFIFO    → 0x40
-
 marshalFlowControl ∷ FlowCtrl → Word16
 marshalFlowControl f = case f of
                          RTS_CTS → 0x0100
                          DTR_DSR → 0x0200
                          XOnXOff → 0x0400
 
-unmarshalModemStatus ∷ Word8 → Word8 → ModemStatus
-unmarshalModemStatus a b =
-    ModemStatus { msClearToSend                = testBit a 4
-                , msDataSetReady               = testBit a 5
-                , msRingIndicator              = testBit a 6
-                , msReceiveLineSignalDetect    = testBit a 7
-                , msDataReady                  = testBit b 0
-                , msOverrunError               = testBit b 1
-                , msParityError                = testBit b 2
-                , msFramingError               = testBit b 3
-                , msBreakInterrupt             = testBit b 4
-                , msTransmitterHoldingRegister = testBit b 5
-                , msTransmitterEmpty           = testBit b 6
-                , msErrorInReceiverFIFO        = testBit b 7
-                }
-
-marshalModemStatus ∷ ModemStatus → (Word8, Word8)
-marshalModemStatus ms = (a, b)
-    where
-      a = mkByte $ zip [4..]
-                       [ msClearToSend
-                       , msDataSetReady
-                       , msRingIndicator
-                       , msReceiveLineSignalDetect
-                       ]
-      b = mkByte $ zip [0..]
-                       [ msDataReady
-                       , msOverrunError
-                       , msParityError
-                       , msFramingError
-                       , msBreakInterrupt
-                       , msTransmitterHoldingRegister
-                       , msTransmitterEmpty
-                       , msErrorInReceiverFIFO
-                       ]
-
-      mkByte ∷ [(Int, ModemStatus → Bool)] → Word8
-      mkByte ts = foldr (\(n, f) x → if f ms then setBit x n else x)
-                        0
-                        ts
 
 supportedSubDivisors ∷ ChipType → [Int]
 supportedSubDivisors ChipType_AM = [0, 1, 2, 4]
@@ -353,7 +305,7 @@ data Interface = Interface_A
                  deriving (Enum, Eq, Ord, Show, Data, Typeable)
 
 interfaceIndex ∷ Interface → Word16
-interfaceIndex = (+ 1) ∘ genFromEnum
+interfaceIndex = succ ∘ genFromEnum
 
 interfaceToUSB ∷ Interface → USB.InterfaceNumber
 interfaceToUSB = genFromEnum
@@ -379,6 +331,9 @@ data DeviceHandle = DeviceHandle
     , devHndDev     ∷ Device
     , devHndTimeout ∷ Int
     }
+
+resetUSB ∷ DeviceHandle → IO ()
+resetUSB = USB.resetDevice ∘ devHndUSB
 
 getTimeout ∷ DeviceHandle → Int
 getTimeout = devHndTimeout
@@ -491,7 +446,7 @@ readData ifHnd numBytes = ChunkedReader $
         --   receivedBytes < packetSize
         if receivedDataBytes < remaining
           then let xs = splitPackets packetSize bytes
-               in liftM (xs ++) (readLoop $ remaining - receivedDataBytes)
+               in liftM (xs ⊕) (readLoop $ remaining - receivedDataBytes)
           else -- We might have received too much data, since we can only
                -- request multiples of 'packetSize' bytes. Split the byte
                -- string at such an index that the first part contains the
@@ -509,14 +464,27 @@ readData ifHnd numBytes = ChunkedReader $
                        $ USB.endpointMaxPacketSize
                        $ ifHndInEPDesc ifHnd
 
-readBulk ∷ InterfaceHandle → Int → IO (ByteString, Bool)
+-- |Perform a bulk read.
+--
+-- Returns the data that was read (in the form of a 'ByteString') and
+-- a flag which indicates whether a timeout occured during the
+-- request.
+readBulk ∷ InterfaceHandle
+         → Int -- ^Number of bytes to read
+         → IO (ByteString, Bool)
 readBulk ifHnd numBytes =
     USB.readBulk (devHndUSB $ ifHndDevHnd ifHnd)
                  (interfaceEndPointIn $ ifHndInterface ifHnd)
                  (devHndTimeout $ ifHndDevHnd ifHnd)
                  numBytes
 
-writeBulk ∷ InterfaceHandle → ByteString → IO (Int, Bool)
+-- |Perform a bulk write.
+--
+-- Returns the number of bytes that where written and a flag which
+-- indicates whether a timeout occured during the request.
+writeBulk ∷ InterfaceHandle
+          → ByteString -- ^Data to be written
+          → IO (Int, Bool)
 writeBulk ifHnd bs =
     USB.writeBulk (devHndUSB $ ifHndDevHnd ifHnd)
                   (interfaceEndPointOut $ ifHndInterface ifHnd)
@@ -539,11 +507,11 @@ type USBControl α = USB.DeviceHandle
 
 -- |Generic FTDI control request with explicit index
 genControl ∷ USBControl α
-           → Word16
+           → Word16          -- ^Index
            → InterfaceHandle
            → RequestCode
            → RequestValue
-           → α
+           → α               -- ^Value
 genControl usbCtrl index ifHnd request value =
     usbCtrl usbHnd
             USB.Vendor
@@ -566,12 +534,15 @@ writeControl = genControl USB.writeControl 0
 
 -------------------------------------------------------------------------------
 
+-- |Reset the FTDI device.
 reset ∷ InterfaceHandle → IO ()
 reset ifHnd = control ifHnd reqReset valResetSIO
 
+-- |Clear the on-chip read buffer.
 purgeReadBuffer ∷ InterfaceHandle → IO ()
 purgeReadBuffer ifHnd = control ifHnd reqReset valPurgeReadBuffer
 
+-- |Clear the on-chip write buffer.
 purgeWriteBuffer ∷ InterfaceHandle → IO ()
 purgeWriteBuffer ifHnd = control ifHnd reqReset valPurgeWriteBuffer
 
@@ -588,18 +559,50 @@ setLatencyTimer ∷ InterfaceHandle → Word8 → IO ()
 setLatencyTimer ifHnd latency = control ifHnd reqSetLatencyTimer
                                         $ fromIntegral latency
 
-pollModemStatus ∷ InterfaceHandle → IO ModemStatus
-pollModemStatus ifHnd = do
-    (bs, _) ← readControl ifHnd reqPollModemStatus 0 2
-    case BS.unpack bs of
-      [x,y] → return $ unmarshalModemStatus x y
-      _     → error "System.FTDI.pollModemStatus: failed"
+-- |MPSSE bitbang modes
+data BitMode = -- |Switch off bitbang mode, back to regular
+               -- serial/FIFO.
+               BitMode_Reset
+               -- |Classical asynchronous bitbang mode, introduced
+               -- with B-type chips.
+             | BitMode_BitBang
+               -- |Multi-Protocol Synchronous Serial Engine, available
+               -- on 2232x chips.
+             | BitMode_MPSSE
+               -- |Synchronous Bit-Bang Mode, available on 2232x and
+               -- R-type chips.
+             | BitMode_SyncBitBang
+               -- |MCU Host Bus Emulation Mode, available on 2232x
+               -- chips. CPU-style fifo mode gets set via EEPROM.
+             | BitMode_MCU
+               -- |Fast Opto-Isolated Serial Interface Mode, available
+               -- on 2232x chips.
+             | BitMode_Opto
+               -- |Bit-Bang on CBus pins of R-type chips, configure in
+               -- EEPROM before use.
+             | BitMode_CBus
+               -- |Single Channel Synchronous FIFO Mode, available on
+               -- 2232H chips.
+             | BitMode_SyncFIFO
+              deriving (Eq, Ord, Show, Data, Typeable)
+
+marshalBitMode ∷ BitMode → Word8
+marshalBitMode bm = case bm of
+                      BitMode_Reset       → 0x00
+                      BitMode_BitBang     → 0x01
+                      BitMode_MPSSE       → 0x02
+                      BitMode_SyncBitBang → 0x04
+                      BitMode_MCU         → 0x08
+                      BitMode_Opto        → 0x10
+                      BitMode_CBus        → 0x20
+                      BitMode_SyncFIFO    → 0x40
 
 setBitMode ∷ InterfaceHandle → Word8 → BitMode → IO ()
 setBitMode ifHnd bitMask bitMode = control ifHnd reqSetBitMode value
     where bitMask' = fromIntegral bitMask
           bitMode' = fromIntegral $ marshalBitMode bitMode
           value    = bitMask' .|. shiftL bitMode' 8
+
 
 -- TODO: finish implementation (encoding divisor and subdivisor in index and
 -- value fields of control request)
@@ -620,11 +623,32 @@ setConfiguration ifHnd bitMask bitMode baudRate = do
                                            ) baudRate
 -}
 
+data Parity = -- |The parity bit is set to one if the number of ones in a given
+              -- set of bits is even (making the total number of ones, including
+              -- the parity bit, odd).
+              Parity_Odd
+              -- |The parity bit is set to one if the number of ones in a given
+              -- set of bits is odd (making the total number of ones, including
+              -- the parity bit, even).
+            | Parity_Even
+            | Parity_Mark  -- ^The parity bit is always 1.
+            | Parity_Space -- ^The parity bit is always 0.
+              deriving (Enum, Eq, Ord, Show, Data, Typeable)
+
+data BitDataFormat = Bits_7
+                   | Bits_8
+
+data StopBits = StopBit_1
+              | StopBit_15
+              | StopBit_2
+                deriving (Enum)
+
+-- |Set RS232 line characteristics
 setLineProperty ∷ InterfaceHandle
-                → BitDataFormat
-                → StopBits
-                → Maybe Parity
-                → Bool
+                → BitDataFormat -- ^Number of bits
+                → StopBits      -- ^Number of stop bits
+                → Maybe Parity  -- ^Optional parity mode
+                → Bool          -- ^Break
                 → IO ()
 setLineProperty ifHnd bitDataFormat stopBits parity break' =
     control ifHnd
@@ -638,9 +662,97 @@ setLineProperty ifHnd bitDataFormat stopBits parity break' =
                      ]
 
 -------------------------------------------------------------------------------
+-- Modem status
+-------------------------------------------------------------------------------
+
+-- |Modem status information. The modem status is send as a header for
+-- each read access. In the absence of data the FTDI chip will
+-- generate the status every 40 ms.
+--
+-- The modem status can be explicitely requested with the
+-- 'pollModemStatus' function.
+data ModemStatus = ModemStatus
+    { -- |Clear to send (CTS)
+      msClearToSend ∷ Bool
+      -- |Data set ready (DTS)
+    , msDataSetReady ∷ Bool
+      -- |Ring indicator (RI)
+    , msRingIndicator ∷ Bool
+      -- |Receive line signal detect (RLSD)
+    , msReceiveLineSignalDetect ∷ Bool
+      -- | Data ready (DR)
+    , msDataReady ∷ Bool
+      -- |Overrun error (OE)
+    , msOverrunError ∷ Bool
+      -- |Parity error (PE)
+    , msParityError ∷ Bool
+      -- |Framing error (FE)
+    , msFramingError ∷ Bool
+      -- |Break interrupt (BI)
+    , msBreakInterrupt ∷ Bool
+      -- |Transmitter holding register (THRE)
+    , msTransmitterHoldingRegister ∷ Bool
+      -- |Transmitter empty (TEMT)
+    , msTransmitterEmpty ∷ Bool
+      -- |Error in RCVR FIFO
+    , msErrorInReceiverFIFO ∷ Bool
+    } deriving (Eq, Ord, Show, Data, Typeable)
+
+unmarshalModemStatus ∷ Word8 → Word8 → ModemStatus
+unmarshalModemStatus a b =
+    ModemStatus { msClearToSend                = testBit a 4
+                , msDataSetReady               = testBit a 5
+                , msRingIndicator              = testBit a 6
+                , msReceiveLineSignalDetect    = testBit a 7
+                , msDataReady                  = testBit b 0
+                , msOverrunError               = testBit b 1
+                , msParityError                = testBit b 2
+                , msFramingError               = testBit b 3
+                , msBreakInterrupt             = testBit b 4
+                , msTransmitterHoldingRegister = testBit b 5
+                , msTransmitterEmpty           = testBit b 6
+                , msErrorInReceiverFIFO        = testBit b 7
+                }
+
+marshalModemStatus ∷ ModemStatus → (Word8, Word8)
+marshalModemStatus ms = (a, b)
+    where
+      a = mkByte $ zip [4..]
+                       [ msClearToSend
+                       , msDataSetReady
+                       , msRingIndicator
+                       , msReceiveLineSignalDetect
+                       ]
+      b = mkByte $ zip [0..]
+                       [ msDataReady
+                       , msOverrunError
+                       , msParityError
+                       , msFramingError
+                       , msBreakInterrupt
+                       , msTransmitterHoldingRegister
+                       , msTransmitterEmpty
+                       , msErrorInReceiverFIFO
+                       ]
+
+      mkByte ∷ [(Int, ModemStatus → Bool)] → Word8
+      mkByte ts = foldr (\(n, f) x → if f ms then setBit x n else x)
+                        0
+                        ts
+
+pollModemStatus ∷ InterfaceHandle → IO ModemStatus
+pollModemStatus ifHnd = do
+    (bs, _) ← readControl ifHnd reqPollModemStatus 0 2
+    case BS.unpack bs of
+      [x,y] → return $ unmarshalModemStatus x y
+      _     → error "System.FTDI.pollModemStatus: failed"
+
+
+-------------------------------------------------------------------------------
 -- Flow control
 -------------------------------------------------------------------------------
 
+-- |Set the flow control for the FTDI chip. Use 'Nothing' to disable
+-- flow control.
 setFlowControl ∷ InterfaceHandle → Maybe FlowCtrl → IO ()
 setFlowControl ifHnd mFC = genControl USB.control
                                       (maybe 0 marshalFlowControl mFC)
@@ -648,10 +760,12 @@ setFlowControl ifHnd mFC = genControl USB.control
                                       reqSetFlowCtrl
                                       0
 
+-- |Set DTR line.
 setDTR ∷ InterfaceHandle → Bool → IO ()
 setDTR ifHnd b = control ifHnd reqSetModemCtrl
                $ if b then valSetDTRHigh else valSetDTRLow
 
+-- |Set RTS line.
 setRTS ∷ InterfaceHandle → Bool → IO ()
 setRTS ifHnd b = control ifHnd reqSetModemCtrl
                $ if b then valSetRTSHigh else valSetRTSLow
@@ -660,9 +774,13 @@ genSetCharacter ∷ RequestCode → InterfaceHandle → Maybe Word8 → IO ()
 genSetCharacter req ifHnd mEC =
     control ifHnd req $ maybe 0 (\c → setBit (fromIntegral c) 8) mEC
 
+-- |Set the special event character. Use 'Nothing' to disable the
+-- event character.
 setEventCharacter ∷ InterfaceHandle → Maybe Word8 → IO ()
 setEventCharacter = genSetCharacter reqSetEventChar
 
+-- |Set the error character.  Use 'Nothing' to disable the error
+-- character.
 setErrorCharacter ∷ InterfaceHandle → Maybe Word8 → IO ()
 setErrorCharacter = genSetCharacter reqSetErrorChar
 
@@ -670,8 +788,14 @@ setErrorCharacter = genSetCharacter reqSetErrorChar
 -- Miscellaneous
 -------------------------------------------------------------------------------
 
--- |Finds the divisors the most closely represent the requested baud rate.
-calcBaudRateDivisors ∷ ∀ α. RealFrac α ⇒ [Int] → α → (Int, Int, α)
+-- |Finds the divisors that most closely represent the requested baud
+-- rate.
+--
+-- The subdivisors are divided by 8.
+calcBaudRateDivisors ∷ ∀ α. RealFrac α
+                     ⇒ [Int]         -- ^Acceptable subdivisors
+                     → α             -- ^Baud rate
+                     → (Int, Int, α) -- ^(divisor, subdivisor, error)
 calcBaudRateDivisors _  3000000  = (0, 0, 0)
 calcBaudRateDivisors _  2000000  = (1, 0, 0)
 calcBaudRateDivisors ss baudRate =
