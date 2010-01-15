@@ -36,8 +36,8 @@ module System.FTDI
     , withInterfaceHandle
 
       -- *Data transfer
-    , ChunkedReader
-    , runChunkedReader
+    , ChunkedReaderT
+    , runChunkedReaderT
     , readData
 
       -- **Low level bulk transfers
@@ -102,11 +102,14 @@ module System.FTDI
 -------------------------------------------------------------------------------
 
 -- base
-import Control.Applicative       ( (<$>) )
+import Control.Applicative       ( Applicative, (<$>), Alternative )
 import Control.Exception         ( Exception, bracket, throwIO )
-import Control.Monad             ( Monad, (>>=), (>>), (=<<), return, fail
+import Control.Monad             ( Functor
+                                 , Monad, (>>=), (>>), (=<<), return, fail
                                  , liftM, liftM2
+                                 , MonadPlus
                                  )
+import Control.Monad.Fix         ( MonadFix )
 import Data.Bool                 ( Bool, otherwise )
 import Data.Bits                 ( Bits, (.|.), (.&.)
                                  , complement, setBit
@@ -408,14 +411,100 @@ withInterfaceHandle h i = bracket (openInterface h i) closeInterface
 -- Data transfer
 -------------------------------------------------------------------------------
 
-newtype ChunkedReader m α = ChunkedReader {unCR ∷ StateT ByteString m α}
-    deriving (Monad, MonadTrans, MonadIO)
+-- |
+newtype ChunkedReaderT m α = ChunkedReaderT {unCR ∷ StateT ByteString m α}
+    deriving ( Functor
+             , Applicative
+             , Alternative
+             , Monad
+             , MonadPlus
+             , MonadTrans
+             , MonadIO
+             , MonadFix
+             )
 
-runChunkedReader ∷ ChunkedReader m α → ByteString → m (α, ByteString)
-runChunkedReader = runStateT ∘ unCR
+{-| Run the ChunkedReaderT given an initial state.
 
-readData ∷ ∀ m. MonadIO m ⇒ InterfaceHandle → Int → ChunkedReader m [ByteString]
-readData ifHnd numBytes = ChunkedReader $
+The initial state represents excess bytes carried over from a previous
+ChunkedReaderT. When invoking runChunkedReaderT for the first time you
+can safely pass the 'BS.empty' bytestring as the initial state.
+
+A contrived example showing how you can manually thread the excess
+bytes through subsequent invocations of runChunkedReaderT:
+
+@
+  example &#x2237; 'InterfaceHandle' &#x2192; IO ()
+  example ifHnd = do
+    (packets1, rest1) &#x2190; runChunkedReaderT ('readData' ifHnd 400) 'BS.empty'
+    print $ 'BS.concat' packets1
+    (packets2, rest2) &#x2190; runChunkedReaderT ('readData' ifHnd 200) rest1
+    print $ 'BS.concat' packets2
+@
+
+However, it is much easier to let 'ChunkedReaderT's monad instance
+handle the plumbing:
+
+@
+  example &#x2237; 'InterfaceHandle' &#x2192; IO ()
+  example ifHnd =
+    let reader = do packets1 &#x2190; 'readData' ifHnd 400
+                    liftIO $ print $ 'BS.concat' packets1
+                    packets2 &#x2190; 'readData' ifHnd 200
+                    liftIO $ print $ 'BS.concat' packets1
+    in runChunkedReaderT reader 'BS.empty'
+@
+
+-}
+runChunkedReaderT ∷ ChunkedReaderT m α → ByteString → m (α, ByteString)
+runChunkedReaderT = runStateT ∘ unCR
+
+{-| Reads data from the given FTDI interface by performing bulk reads.
+
+This function produces an action in the ChunkedReaderT monad that,
+when executed, will read exactly the requested number of
+bytes. Executing the readData action will block until all data is
+read. The result value is a list of chunks, represented as
+ByteStrings. This representation was choosen for efficiency reasons.
+
+Data is read in packets. The function may choose to request more than
+needed in order to get the highest possible bandwidth. The excess of
+bytes is kept as the state of the ChunkedReaderT monad. A subsequent
+invocation of readData will first return bytes from the stored state
+before requesting more from the device itself. A consequence of this
+behaviour is that even when you request 100 bytes the function will
+actually request 512 bytes (depending on the packet size) and /block/
+until all 512 bytes are read! There is no workaround since requesting
+less bytes than the packet size is an error.
+
+USB timeouts will not interrupt readData. In case of a timeout
+readData will simply resume reading data. A small USB timeout can
+degrade performance.
+
+The FTDI latency timer can cause poor performance. If the FTDI chip
+can't fill a packet before the latency timer fires it is forced to
+send an incomplete packet. This will cause a stream of tiny packets
+instead of a few large packets. Performance will suffer horribly, but
+the request will still be completed.
+
+If you need to make a lot of small requests then a small latency can
+actually improve performance.
+
+Modem status bytes are filtered from the result. Every packet send by
+the FTDI chip contains 2 modem status bytes. They are not part of the
+data and do not count for the number of bytes read. They will not
+appear in the result.
+
+Example:
+
+@
+  -- Read 100 data bytes from ifHnd
+  (packets, rest) &#x2190; 'runChunkedReaderT' ('readData' ifHnd 100) 'BS.empty'
+@
+
+-}
+-- TODO: timeout
+readData ∷ ∀ m. MonadIO m ⇒ InterfaceHandle → Int → ChunkedReaderT m [ByteString]
+readData ifHnd numBytes = ChunkedReaderT $
     do prevRest ← get
        let readNumBytes = numBytes - BS.length prevRest
        if readNumBytes > 0
@@ -430,11 +519,16 @@ readData ifHnd numBytes = ChunkedReader $
       readLoop remaining = do
         -- Amount of bytes we need to request in order to get atleast
         -- 'readNumBytes' bytes of data.
-        let reqSize = packetSize ⋅ remaining `divRndUp` packetDataSize
+        let reqSize    = packetSize ⋅ reqPackets
+            reqPackets = remaining `divRndUp` packetDataSize
+        -- Timeout is ignored; the number of bytes that was read
+        -- contains enough information.
         (bytes, _) ← liftIO $ readBulk ifHnd reqSize
 
-        let receivedBytes     = BS.length bytes
-            receivedDataBytes = receivedBytes - packetHeaderSize ⋅ (receivedBytes `divRndUp` packetSize)
+        let receivedDataBytes   = receivedBytes - receivedHeaderBytes
+            receivedBytes       = BS.length bytes
+            receivedHeaderBytes = packetHeaderSize ⋅ receivedPackets
+            receivedPackets     = receivedBytes `divRndUp` packetSize
 
         -- The reason for not actually getting the requested amount of bytes
         -- could be either a USB timeout or the FTDI latency timer firing.
@@ -461,8 +555,8 @@ readData ifHnd numBytes = ChunkedReader $
       packetDataSize   = packetSize - packetHeaderSize
       packetHeaderSize = 2
       packetSize       = USB.maxPacketSize
-                       $ USB.endpointMaxPacketSize
-                       $ ifHndInEPDesc ifHnd
+                         $ USB.endpointMaxPacketSize
+                         $ ifHndInEPDesc ifHnd
 
 -- |Perform a bulk read.
 --
