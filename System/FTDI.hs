@@ -126,7 +126,7 @@ import Data.Tuple                ( fst, snd )
 import Data.Typeable             ( Typeable )
 import Data.Word                 ( Word8, Word16 )
 import Prelude                   ( Enum, succ
-                                 , Num, (+), (-), Integral, (^)
+                                 , Num, (+), (-), signum, Integral, quotRem, (^)
                                  , RealFrac
                                  , fromEnum, fromInteger, fromIntegral
                                  , abs, realToFrac, floor
@@ -516,11 +516,11 @@ readData ifHnd numBytes = ChunkedReaderT $
               in put newRest >> return [bs]
     where
       readLoop ∷ Int → StateT ByteString m [ByteString]
-      readLoop remaining = do
+      readLoop readNumBytes = do
         -- Amount of bytes we need to request in order to get atleast
         -- 'readNumBytes' bytes of data.
         let reqSize    = packetSize ⋅ reqPackets
-            reqPackets = remaining `divRndUp` packetDataSize
+            reqPackets = readNumBytes `divRndUp` packetDataSize
         -- Timeout is ignored; the number of bytes that was read
         -- contains enough information.
         (bytes, _) ← liftIO $ readBulk ifHnd reqSize
@@ -538,14 +538,14 @@ readData ifHnd numBytes = ChunkedReaderT $
         --
         -- In case of FTDI latency timer:
         --   receivedBytes < packetSize
-        if receivedDataBytes < remaining
+        if receivedDataBytes < readNumBytes
           then let xs = splitPackets packetSize bytes
-               in liftM (xs ⊕) (readLoop $ remaining - receivedDataBytes)
+               in liftM (xs ⊕) (readLoop $ readNumBytes - receivedDataBytes)
           else -- We might have received too much data, since we can only
                -- request multiples of 'packetSize' bytes. Split the byte
-               -- string at such an index that the first part contains the
-               -- remaining data bytes. The rest is kept for future usage.
-               let (bs, newRest) = BS.splitAt (splitIndex remaining) bytes
+               -- string at such an index that the first part contains
+               -- readNumBytes of data bytes. The rest is kept for future usage.
+               let (bs, newRest) = BS.splitAt (splitIndex readNumBytes) bytes
                in put newRest >> return (splitPackets packetSize bs)
 
       splitIndex n = p ⋅ packetSize + packetHeaderSize
@@ -946,10 +946,23 @@ prop_divRndUp_max ∷ Integral α ⇒ α → α → Bool
 prop_divRndUp_max x y = let d = divRndUp x y
                         in x `div` y ≤ d
 
+prop_divRndUp_divRndUp2, prop_divRndUp_divRndUp3 ∷ Integral α ⇒ α → α → Bool
+prop_divRndUp_divRndUp2 x y = divRndUp x y ≡ divRndUp2 x y
+prop_divRndUp_divRndUp3 x y = divRndUp x y ≡ divRndUp3 x y
+
 divRndUp ∷ Integral α ⇒ α → α → α
 divRndUp x y = let r | mod x y ≡ 0 = 0
                      | otherwise   = 1
                in div x y + r
+
+divRndUp2 ∷ Integral α ⇒ α → α → α
+divRndUp2 x y = let (q, r) = quotRem x y
+                in q + signum r
+
+divRndUp3 ∷ Integral α ⇒ α → α → α
+divRndUp3 x y = case quotRem x y of
+                  (q, 0) → q
+                  (q, _) → q + 1
 
 -- |Split a stream of bytes into packets. The first 2 bytes of each
 -- packet are the modem status bytes and are dropped.

@@ -13,7 +13,7 @@ category:      System
 
 library
   exposed-modules: System.FTDI
-  build-depends: base                 >= 4       && < 4.2
+  build-depends: base                 >= 4       && < 4.3
                , base-unicode-symbols >= 0.1.1   && < 0.2
                , bytestring           >= 0.9.1.4 && < 0.10
                , safe                 == 0.2.*
