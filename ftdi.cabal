@@ -11,8 +11,17 @@ license-file:  LICENSE
 synopsis:      A thin layer over USB to communicate with FTDI chips
 category:      System
 
+flag test
+  description: Build the testing suite
+  default:     False
+
+source-repository head
+  type:     darcs
+  location: http://code.haskell.org/~roelvandijk/code/ftdi
+
 library
   exposed-modules: System.FTDI
+  other-modules: System.FTDI.Util
   build-depends: base                 >= 4       && < 4.3
                , base-unicode-symbols >= 0.1.1   && < 0.2
                , bytestring           >= 0.9.1.4 && < 0.10
@@ -20,3 +29,17 @@ library
                , transformers         >= 0.1.4   && < 0.2
                , usb                  == 0.3.*
   ghc-options: -Wall
+
+executable test
+  main-is: test.hs
+  other-modules: System.FTDI.Util
+               , System.FTDI.Util.Properties
+  build-depends: QuickCheck                 >= 2.1.0.2 && < 2.2
+               , test-framework             >= 0.2.4   && < 0.3
+               , test-framework-quickcheck2 >= 0.2.4   && < 0.3
+               , tagged                     >= 0.0     && < 0.1
+
+  if flag(test)
+    buildable: True
+  else
+    buildable: False

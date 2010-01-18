@@ -6,10 +6,9 @@
 {-# LANGUAGE UnicodeSyntax #-}
 
 module System.FTDI
-    ( ChipType(..)
-
-      -- *Devices
-    , Device
+    ( -- *Devices
+      Device
+    , ChipType(..)
     , getChipType
     , setChipType
     , fromUSBDevice
@@ -49,8 +48,8 @@ module System.FTDI
       --
       --   * Modem status bytes
       --
-      -- USB timeouts are not ignored, but they will prevent the request
-      -- from being completed.
+      -- USB timeouts are not ignored, but they will prevent the request from
+      -- being completed.
     , readBulk
     , writeBulk
 
@@ -127,26 +126,28 @@ import Data.Typeable             ( Typeable )
 import Data.Word                 ( Word8, Word16 )
 import Prelude                   ( Enum, succ
                                  , Num, (+), (-), signum, Integral, quotRem, (^)
-                                 , RealFrac
+                                 , RealFrac, Fractional
                                  , fromEnum, fromInteger, fromIntegral
-                                 , abs, realToFrac, floor
-                                 , mod, div, error
+                                 , abs, realToFrac, floor, ceiling
+                                 , div, mod, divMod, error
                                  )
 import System.IO                 ( IO )
 import Text.Show                 ( Show )
 
 -- base-unicode-symbols
 import Data.Bool.Unicode         ( (∧) )
-import Data.Eq.Unicode           ( (≡) )
+import Data.Eq.Unicode           ( (≡), (≢) )
 import Data.Function.Unicode     ( (∘) )
 import Data.Monoid.Unicode       ( (⊕) )
 import Data.Ord.Unicode          ( (≤), (≥) )
 import Prelude.Unicode           ( (⋅), (÷) )
 
 -- bytestring
-import qualified Data.ByteString          as BS
-import qualified Data.ByteString.Internal as BSI
+import qualified Data.ByteString as BS
 import Data.ByteString           ( ByteString )
+
+-- ftdi
+import System.FTDI.Util          ( divRndUp, clamp, genFromEnum, orBits )
 
 -- safe
 import Safe                      ( atMay, headMay )
@@ -163,17 +164,6 @@ import qualified System.USB as USB
 --
 -------------------------------------------------------------------------------
 
-data ChipType = ChipType_AM
-              | ChipType_BM
-              | ChipType_2232C
-              | ChipType_R
-              | ChipType_2232H
-              | ChipType_4232H
-                deriving (Enum, Eq, Ord, Show, Data, Typeable)
-
-data FlowCtrl = RTS_CTS -- ^Request-To-Send \/ Clear-To-Send
-              | DTR_DSR -- ^Data-Terminal-Ready \/ Data-Set-Ready
-              | XOnXOff -- ^Transmitter on \/ Transmitter off
 
 type RequestCode  = Word8
 type RequestValue = Word16
@@ -248,18 +238,6 @@ valSetRTSLow  = 0x0200
 defaultTimeout ∷ Int
 defaultTimeout = 5000
 
--------------------------------------------------------------------------------
-
-marshalFlowControl ∷ FlowCtrl → Word16
-marshalFlowControl f = case f of
-                         RTS_CTS → 0x0100
-                         DTR_DSR → 0x0200
-                         XOnXOff → 0x0400
-
-
-supportedSubDivisors ∷ ChipType → [Int]
-supportedSubDivisors ChipType_AM = [0, 1, 2, 4]
-supportedSubDivisors _           = [0..7]
 
 -------------------------------------------------------------------------------
 -- Devices
@@ -270,6 +248,18 @@ data Device = Device
     , devUSBConf  ∷ USB.ConfigDesc
     , devChipType ∷ ChipType
     }
+
+data ChipType = ChipType_AM
+              | ChipType_BM
+              | ChipType_2232C
+              | ChipType_R
+              | ChipType_2232H
+              | ChipType_4232H
+                deriving (Enum, Eq, Ord, Show, Data, Typeable)
+
+supportedSubDivisors ∷ ChipType → [Int]
+supportedSubDivisors ChipType_AM = [0, 1, 2, 4]
+supportedSubDivisors _           = [0..7]
 
 getChipType ∷ Device → ChipType
 getChipType = devChipType
@@ -845,8 +835,18 @@ pollModemStatus ifHnd = do
 -- Flow control
 -------------------------------------------------------------------------------
 
--- |Set the flow control for the FTDI chip. Use 'Nothing' to disable
--- flow control.
+data FlowCtrl = RTS_CTS -- ^Request-To-Send \/ Clear-To-Send
+              | DTR_DSR -- ^Data-Terminal-Ready \/ Data-Set-Ready
+              | XOnXOff -- ^Transmitter on \/ Transmitter off
+
+marshalFlowControl ∷ FlowCtrl → Word16
+marshalFlowControl f = case f of
+                         RTS_CTS → 0x0100
+                         DTR_DSR → 0x0200
+                         XOnXOff → 0x0400
+
+-- |Set the flow control for the FTDI chip. Use 'Nothing' to disable flow
+-- control.
 setFlowControl ∷ InterfaceHandle → Maybe FlowCtrl → IO ()
 setFlowControl ifHnd mFC = genControl USB.control
                                       (maybe 0 marshalFlowControl mFC)
@@ -868,13 +868,12 @@ genSetCharacter ∷ RequestCode → InterfaceHandle → Maybe Word8 → IO ()
 genSetCharacter req ifHnd mEC =
     control ifHnd req $ maybe 0 (\c → setBit (fromIntegral c) 8) mEC
 
--- |Set the special event character. Use 'Nothing' to disable the
--- event character.
+-- |Set the special event character. Use 'Nothing' to disable the event
+-- character.
 setEventCharacter ∷ InterfaceHandle → Maybe Word8 → IO ()
 setEventCharacter = genSetCharacter reqSetEventChar
 
--- |Set the error character.  Use 'Nothing' to disable the error
--- character.
+-- |Set the error character.  Use 'Nothing' to disable the error character.
 setErrorCharacter ∷ InterfaceHandle → Maybe Word8 → IO ()
 setErrorCharacter = genSetCharacter reqSetErrorChar
 
@@ -882,8 +881,7 @@ setErrorCharacter = genSetCharacter reqSetErrorChar
 -- Miscellaneous
 -------------------------------------------------------------------------------
 
--- |Finds the divisors that most closely represent the requested baud
--- rate.
+-- |Finds the divisors that most closely represent the requested baud rate.
 --
 -- The subdivisors are divided by 8.
 calcBaudRateDivisors ∷ ∀ α. RealFrac α
@@ -913,59 +911,13 @@ calcBaudRateDivisors ss baudRate =
       calcBaudRate ∷ Int → α → α
       calcBaudRate d s = maxBaudRate ÷ (realToFrac d + s)
 
+
 -------------------------------------------------------------------------------
 -- Utility functions
 -------------------------------------------------------------------------------
 
-genFromEnum ∷ (Enum e, Num n) ⇒ e → n
-genFromEnum = fromIntegral ∘ fromEnum
-
-orBits ∷ Bits α ⇒ [α] → α
-orBits = foldr (.|.) 0
-
-andBits ∷ Bits α ⇒ [α] → α
-andBits = foldr (.&.) $ complement 0
-
-prop_clamp ∷ Ord α ⇒ α → α → α → Bool
-prop_clamp lo hi x = lo ≤ x ∧ x ≤ hi
-
-clamp ∷ Ord α ⇒ α → α → α → α
-clamp lo hi = atLeast lo ∘ atMost hi
-
-atLeast ∷ Ord α ⇒ α → α → α
-atLeast = max
-
-atMost ∷ Ord α ⇒ α → α → α
-atMost = min
-
-prop_divRndUp_min ∷ Integral α ⇒ α → α → Bool
-prop_divRndUp_min x y = let d = divRndUp x y
-                        in d ⋅ y ≥ x
-
-prop_divRndUp_max ∷ Integral α ⇒ α → α → Bool
-prop_divRndUp_max x y = let d = divRndUp x y
-                        in x `div` y ≤ d
-
-prop_divRndUp_divRndUp2, prop_divRndUp_divRndUp3 ∷ Integral α ⇒ α → α → Bool
-prop_divRndUp_divRndUp2 x y = divRndUp x y ≡ divRndUp2 x y
-prop_divRndUp_divRndUp3 x y = divRndUp x y ≡ divRndUp3 x y
-
-divRndUp ∷ Integral α ⇒ α → α → α
-divRndUp x y = let r | mod x y ≡ 0 = 0
-                     | otherwise   = 1
-               in div x y + r
-
-divRndUp2 ∷ Integral α ⇒ α → α → α
-divRndUp2 x y = let (q, r) = quotRem x y
-                in q + signum r
-
-divRndUp3 ∷ Integral α ⇒ α → α → α
-divRndUp3 x y = case quotRem x y of
-                  (q, 0) → q
-                  (q, _) → q + 1
-
--- |Split a stream of bytes into packets. The first 2 bytes of each
--- packet are the modem status bytes and are dropped.
+-- |Split a stream of bytes into packets. The first 2 bytes of each packet are
+-- the modem status bytes and are dropped.
 splitPackets ∷ Int → ByteString → [ByteString]
 splitPackets n = go
     where
