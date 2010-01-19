@@ -1,6 +1,16 @@
+{-# LANGUAGE NoImplicitPrelude #-}
 {-# LANGUAGE UnicodeSyntax #-}
 
 module System.FTDI.Util.Properties where
+
+-- base
+import Control.Monad ( (>>) )
+import Data.Bool     ( otherwise )
+import Data.Function ( ($) )
+import Prelude       ( Integral, RealFrac, Fractional, Double
+                     , fromInteger, toInteger, fromIntegral
+                     , (+), abs, mod, ceiling, div
+                     )
 
 -- base-unicode
 import Data.Eq.Unicode  ( (≡), (≢) )
@@ -17,8 +27,11 @@ import Test.QuickCheck ( Property, (==>) )
 -------------------------------------------------------------------------------
 
 prop_divRndUp_min ∷ Integral α ⇒ α → α → Property
-prop_divRndUp_min x y = let d = divRndUp x (abs y)
-                        in y ≢ 0 ==> d ⋅ abs y ≥ x
+prop_divRndUp_min x y = let d  = divRndUp x (abs y)
+                            d' = toInteger d
+                            y' = toInteger y
+                            x' = toInteger x
+                        in y ≢ 0 ==> d' ⋅ abs y' ≥ x'
 
 prop_divRndUp_max ∷ Integral α ⇒ α → α → Property
 prop_divRndUp_max x y = let d = divRndUp x y
@@ -26,12 +39,13 @@ prop_divRndUp_max x y = let d = divRndUp x y
 
 prop_divRndUp_ceilFrac ∷ Integral α ⇒ α → α → Property
 prop_divRndUp_ceilFrac x y =
-    let x' = fromIntegral x
-        y' = fromIntegral y
+    let x' = fromIntegral x ∷ Double
+        y' = fromIntegral y ∷ Double
     in y ≢ 0 ==> divRndUp x y ≡ ceilFrac x' y'
 
 prop_divRndUp2 ∷ Integral α ⇒ α → α → Property
 prop_divRndUp2 x y = y ≢ 0 ==> divRndUp x y ≡ divRndUp2 x y
+
 
 -------------------------------------------------------------------------------
 

@@ -8,33 +8,22 @@ module System.FTDI.Util where
 -------------------------------------------------------------------------------
 
 -- base
-import Control.Monad             ( (>>) )
-import Data.Bool                 ( Bool, otherwise )
-import Data.Bits                 ( Bits, (.|.), (.&.)
-                                 , complement, setBit
-                                 , shiftL, testBit
-                                 )
-import Data.Eq                   ( (==) )
+import Data.Bool                 ( Bool )
+import Data.Bits                 ( Bits, (.|.), (.&.), complement )
 import Data.Function             ( ($) )
-import Data.List                 ( foldr, head, minimumBy, partition, zip )
-import Data.Maybe                ( Maybe(Just, Nothing), maybe )
-import Data.Ord                  ( Ord, (<), (>), min, max )
-import Data.Word                 ( Word8, Word16 )
+import Data.List                 ( foldr )
+import Data.Ord                  ( Ord, min, max )
 import Prelude                   ( Enum
-                                 , Num, (+), (-), signum, Integral, quotRem, (^)
-                                 , RealFrac, Fractional
+                                 , Num, (+), Integral
                                  , fromEnum, fromInteger, fromIntegral
-                                 , abs, realToFrac, floor, ceiling
-                                 , div, mod, divMod, error
+                                 , divMod, error
                                  )
 
 -- base-unicode-symbols
 import Data.Bool.Unicode         ( (∧) )
-import Data.Eq.Unicode           ( (≡), (≢) )
+import Data.Eq.Unicode           ( (≢) )
 import Data.Function.Unicode     ( (∘) )
-import Data.Monoid.Unicode       ( (⊕) )
-import Data.Ord.Unicode          ( (≤), (≥) )
-import Prelude.Unicode           ( (⋅), (÷) )
+import Data.Ord.Unicode          ( (≤) )
 
 -------------------------------------------------------------------------------
 -------------------------------------------------------------------------------

@@ -3,9 +3,9 @@ version:       0.1
 cabal-version: >=1.6
 build-type:    Simple
 stability:     experimental
-author:        Roel van Dijk, Bas van Dijk
-maintainer:    vandijk.roel@gmail.com, v.dijk.bas@gmail.com
-copyright:     (c) 2009 Roel van Dijk, Bas van Dijk
+author:        Roel van Dijk
+maintainer:    vandijk.roel@gmail.com
+copyright:     (c) 2009 Roel van Dijk
 license:       BSD3
 license-file:  LICENSE
 synopsis:      A thin layer over USB to communicate with FTDI chips
@@ -21,23 +21,28 @@ source-repository head
 
 library
   exposed-modules: System.FTDI
-  other-modules: System.FTDI.Util
+  other-modules: System.FTDI.Internal
+               , System.FTDI.Util
   build-depends: base                 >= 4       && < 4.3
                , base-unicode-symbols >= 0.1.1   && < 0.2
                , bytestring           >= 0.9.1.4 && < 0.10
-               , safe                 == 0.2.*
+               , safe                 >= 0.2     && < 0.3
                , transformers         >= 0.1.4   && < 0.2
-               , usb                  == 0.3.*
+               , usb                  >= 0.3     && < 0.4
   ghc-options: -Wall
 
 executable test
   main-is: test.hs
-  other-modules: System.FTDI.Util
+  other-modules: System.FTDI.Internal
+               , System.FTDI.Properties
+               , System.FTDI.Util
                , System.FTDI.Util.Properties
   build-depends: QuickCheck                 >= 2.1.0.2 && < 2.2
                , test-framework             >= 0.2.4   && < 0.3
                , test-framework-quickcheck2 >= 0.2.4   && < 0.3
+               , derive                     >= 2.3     && < 2.4
                , tagged                     >= 0.0     && < 0.1
+  ghc-options: -Wall -fno-warn-orphans
 
   if flag(test)
     buildable: True
