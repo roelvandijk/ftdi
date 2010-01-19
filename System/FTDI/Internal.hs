@@ -36,9 +36,10 @@ import Data.Typeable             ( Typeable )
 import Data.Word                 ( Word8, Word16 )
 import Prelude                   ( Enum, succ
                                  , Num, (+), (-), Integral, (^)
-                                 , RealFrac
+                                 , Fractional, RealFrac
+                                 , Double, Integer
                                  , fromEnum, fromInteger, fromIntegral
-                                 , abs, realToFrac, floor
+                                 , abs, realToFrac, floor, ceiling
                                  , div, error
                                  )
 import System.IO                 ( IO )
@@ -84,12 +85,6 @@ instance Exception FTDIException
 -------------------------------------------------------------------------------
 -- Constants
 -------------------------------------------------------------------------------
-
-maxBaudRate ∷ Num α ⇒ α
-maxBaudRate = 3000000
-
-minBaudRate ∷ Num α ⇒ α
-minBaudRate = 183
 
 reqReset           ∷ RequestCode
 reqSetModemCtrl    ∷ RequestCode
@@ -799,6 +794,16 @@ setErrorCharacter = genSetCharacter reqSetErrorChar
 -- Miscellaneous
 -------------------------------------------------------------------------------
 
+maxBaudRate ∷ Num α ⇒ α
+maxBaudRate = 3000000
+
+-- Minimum baud rate is the maximum baudrate divided by the largest
+-- possible divider.
+minBaudRate ∷ Num α ⇒ α
+minBaudRate = fromIntegral
+              $ (ceiling ∷ Double → Integer)
+              $ (maxBaudRate ÷ 2 ^ (14 ∷ Int) - 1 + 7 ÷ 8)
+
 -- |Finds the divisors that most closely represent the requested baud rate.
 --
 -- The subdivisors are divided by 8.
@@ -826,5 +831,7 @@ calcBaudRateDivisors ss baudRate =
       divisor br s = floor $ (maxBaudRate - br ⋅ s) ÷ br
 
 -- |Calculates the baud rate from a divisor and a subdivisor.
-calcBaudRate ∷ RealFrac α ⇒ Int → α → α
+calcBaudRate ∷ Fractional α ⇒ Int → α → α
+calcBaudRate 0 0 = 3000000
+calcBaudRate 1 0 = 2000000
 calcBaudRate d s = maxBaudRate ÷ (realToFrac d + s)

@@ -1,3 +1,4 @@
+{-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE UnicodeSyntax #-}
 {-# LANGUAGE TemplateHaskell #-}
 
@@ -11,8 +12,10 @@ module System.FTDI.Properties where
 -- base
 import Control.Applicative   ( liftA2 )
 import Control.Arrow         ( first )
+import Control.Monad         ( liftM )
 import Data.Bits             ( (.&.) )
 import Data.Bool             ( Bool )
+import Data.List             ( map )
 import Data.Word             ( Word8 )
 import Data.Tuple            ( uncurry )
 
@@ -39,10 +42,17 @@ import System.FTDI.Internal  ( marshalModemStatus
                              )
 
 -- QuickCheck
-import Test.QuickCheck ( Arbitrary, arbitrary, shrink, choose
-                       , arbitraryBoundedIntegral, shrinkIntegral
-                       , Property, (==>)
-                       )
+import Test.QuickCheck       ( Arbitrary, arbitrary, shrink, choose
+                             , arbitraryBoundedIntegral
+                             , arbitraryBoundedRandom
+                             , shrinkIntegral
+                             , shrinkRealFrac
+                             , frequency
+                             , Property, (==>)
+                             )
+
+-- random
+import System.Random         ( Random )
 
 
 -------------------------------------------------------------------------------
@@ -65,7 +75,7 @@ prop_unmarshalModemStatus =
                    )
     where ignoreBits = first (.&. 0xf0)
 
-prop_calcBaudRateDivisor ∷ RealFrac α ⇒ ChipType → α → Property
+prop_calcBaudRateDivisor ∷ RealFrac α ⇒ ChipType → BaudRate α → Property
 prop_calcBaudRateDivisor chip baudRate =
     let subDivs   = supportedSubDivisors chip
         (d, s, e) = calcBaudRateDivisors subDivs baudRate
@@ -73,17 +83,23 @@ prop_calcBaudRateDivisor chip baudRate =
     in (baudRate ≥ minBaudRate ∧ baudRate ≤ maxBaudRate)
        ==> abs (baudRate' - baudRate) ÷ baudRate ≤ e
 
-prop_baudRateError ∷ RealFrac α ⇒ α → ChipType → α → Property
-prop_baudRateError maxError chip baudRate =
+prop_baudRateError ∷ RealFrac α ⇒ α → (ChipType → BaudRate α → Property)
+prop_baudRateError maxError = \chip baudRate →
     let subDivs   = supportedSubDivisors chip
         (_, _, e) = calcBaudRateDivisors subDivs baudRate
     in (baudRate ≥ minBaudRate ∧ baudRate ≤ maxBaudRate)
-       ==> e ≤ maxError
+       ==> unBaudRate e ≤ maxError
 
 
 -------------------------------------------------------------------------------
 -- Misc
 -------------------------------------------------------------------------------
+
+newtype BaudRate α = BaudRate {unBaudRate ∷ α}
+    deriving ( Eq, Ord, Num, Enum, Integral
+             , Fractional, Real, RealFrac, Show
+             , Random
+             )
 
 isIdentity ∷ Eq α ⇒ (α → α) → (α → Bool)
 isIdentity = isIdentityWith (≡)
@@ -96,10 +112,21 @@ isIdentityWith eq = liftA2 eq id
 -- Arbitrary instances
 -------------------------------------------------------------------------------
 
-$( derive makeArbitrary ''ModemStatus )
-$( derive makeArbitrary ''ChipType )
-
 instance Arbitrary Word8 where
     arbitrary = arbitraryBoundedIntegral
     shrink    = shrinkIntegral
+
+instance Num α ⇒ Bounded (BaudRate α) where
+    minBound = BaudRate minBaudRate
+    maxBound = BaudRate maxBaudRate
+
+instance (Random α, Num α, Arbitrary α) ⇒ Arbitrary (BaudRate α) where
+    arbitrary = frequency [ (1500000 - minBaudRate, choose (minBound, 1500000))
+                          , (1, return 2000000)
+                          , (1, return 3000000)
+                          ]
+    shrink    = map BaudRate ∘ shrink ∘ unBaudRate
+
+$( derive makeArbitrary ''ModemStatus )
+$( derive makeArbitrary ''ChipType )
 

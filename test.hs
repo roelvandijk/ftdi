@@ -5,10 +5,11 @@
 module Main where
 
 -- base
+import Data.Char     ( String )
 import Data.Function ( ($) )
 import Data.Int      ( Int )
 import Data.Word     ( Word8 )
-import Prelude       ( Integral, Integer
+import Prelude       ( Num, Integral, Integer
                      , RealFrac, Float, Double
                      , fromRational
                      )
@@ -25,7 +26,8 @@ import Test.QuickCheck
 
 -- ftdi
 import System.FTDI                 ( ChipType )
-import System.FTDI.Properties      ( prop_marshalModemStatus
+import System.FTDI.Properties      ( BaudRate
+                                   , prop_marshalModemStatus
                                    , prop_unmarshalModemStatus
                                    , prop_calcBaudRateDivisor
                                    , prop_baudRateError
@@ -35,6 +37,10 @@ import System.FTDI.Util.Properties ( prop_divRndUp_min
                                    , prop_divRndUp_ceilFrac
                                    , prop_divRndUp2
                                    )
+
+-- random
+import System.Random ( Random )
+
 -- tagged
 import Data.Tagged ( Tagged(Tagged, unTagged) )
 
@@ -51,8 +57,14 @@ tests =
       , testProperty "unmarshal id" prop_unmarshalModemStatus
       ]
     , testGroup "baud rate"
-      [testGroup "Float"   $ unTagged (baudRate 0.1 ∷ Tagged Float  [Test])
-      , testGroup "Double" $ unTagged (baudRate 0.1 ∷ Tagged Double [Test])
+      [ testGroup "error"
+        [ baudRateError "Float"  (0.05 ∷ Float)
+        , baudRateError "Double" (0.05 ∷ Double)
+        ]
+      , testGroup "calculate divisor"
+        [ unTagged (baudRateDivisor "Float"  ∷ Tagged Float  Test)
+        , unTagged (baudRateDivisor "Double" ∷ Tagged Double Test)
+        ]
       ]
     ]
   , testGroup "utilities"
@@ -64,11 +76,15 @@ tests =
     ]
   ]
 
-baudRate ∷ ∀ α. (Arbitrary α, RealFrac α) ⇒ α → Tagged α [Test]
-baudRate e = Tagged
-    [ testProperty "divisor" (prop_calcBaudRateDivisor ∷ ChipType → α → Property)
-    , testProperty "error"   (prop_baudRateError e ∷ ChipType → α → Property)
-    ]
+baudRateError ∷ ∀ α. (Arbitrary α, Random α, Num α, RealFrac α)
+              ⇒ String → α → Test
+baudRateError n e =
+    testProperty n (prop_baudRateError e ∷ ChipType → BaudRate α → Property)
+
+baudRateDivisor ∷ ∀ α. (Arbitrary α, Random α, Num α, RealFrac α)
+                ⇒ String → Tagged α Test
+baudRateDivisor n =
+    Tagged $ testProperty n (prop_calcBaudRateDivisor ∷ ChipType → BaudRate α → Property)
 
 divRndUp ∷ ∀ α. (Arbitrary α, Integral α) ⇒ Tagged α [Test]
 divRndUp = Tagged
