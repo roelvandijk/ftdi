@@ -1,7 +1,9 @@
+{-# LANGUAGE CPP #-}
 {-# LANGUAGE DeriveDataTypeable #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE NoImplicitPrelude #-}
+{-# LANGUAGE PatternGuards #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE UnicodeSyntax #-}
 
@@ -22,7 +24,7 @@ import Control.Monad             ( Functor
 import Control.Monad.Fix         ( MonadFix )
 import Data.Bool                 ( Bool(False, True), otherwise )
 import Data.Bits                 ( Bits, (.|.)
-                                 , setBit, shiftL, testBit
+                                 , setBit, shiftL, shiftR, testBit
                                  )
 import Data.Data                 ( Data )
 import Data.Eq                   ( Eq, (==) )
@@ -53,10 +55,13 @@ import Prelude.Unicode           ( (⋅), (÷) )
 
 -- bytestring
 import qualified Data.ByteString as BS ( drop, length, null, splitAt, unpack )
+#ifdef __HADDOCK__
+import qualified Data.ByteString as BS ( empty )
+#endif
 import Data.ByteString           ( ByteString )
 
 -- ftdi
-import System.FTDI.Util          ( divRndUp, clamp, genFromEnum, orBits )
+import System.FTDI.Utils         ( divRndUp, clamp, genFromEnum, orBits )
 
 -- safe
 import Safe                      ( atMay, headMay )
@@ -70,12 +75,8 @@ import qualified System.USB as USB
 
 
 -------------------------------------------------------------------------------
---
+-- Exceptions
 -------------------------------------------------------------------------------
-
-
-type RequestCode  = Word8
-type RequestValue = Word16
 
 data FTDIException = InterfaceNotFound deriving (Show, Data, Typeable)
 
@@ -83,8 +84,11 @@ instance Exception FTDIException
 
 
 -------------------------------------------------------------------------------
--- Constants
+-- Request codes and values
 -------------------------------------------------------------------------------
+
+type RequestCode  = Word8
+type RequestValue = Word16
 
 reqReset           ∷ RequestCode
 reqSetModemCtrl    ∷ RequestCode
@@ -322,11 +326,11 @@ newtype ChunkedReaderT m α = ChunkedReaderT {unCR ∷ StateT ByteString m α}
 {-| Run the ChunkedReaderT given an initial state.
 
 The initial state represents excess bytes carried over from a previous
-ChunkedReaderT. When invoking runChunkedReaderT for the first time you
-can safely pass the 'BS.empty' bytestring as the initial state.
+run. When invoking runChunkedReaderT for the first time you can safely pass the
+'BS.empty' bytestring as the initial state.
 
-A contrived example showing how you can manually thread the excess
-bytes through subsequent invocations of runChunkedReaderT:
+A contrived example showing how you can manually thread the excess bytes
+through subsequent invocations of runChunkedReaderT:
 
 @
   example &#x2237; 'InterfaceHandle' &#x2192; IO ()
@@ -337,8 +341,8 @@ bytes through subsequent invocations of runChunkedReaderT:
     print $ 'BS.concat' packets2
 @
 
-However, it is much easier to let 'ChunkedReaderT's monad instance
-handle the plumbing:
+However, it is much easier to let 'ChunkedReaderT's monad instance handle the
+plumbing:
 
 @
   example &#x2237; 'InterfaceHandle' &#x2192; IO ()
@@ -356,39 +360,36 @@ runChunkedReaderT = runStateT ∘ unCR
 
 {-| Reads data from the given FTDI interface by performing bulk reads.
 
-This function produces an action in the ChunkedReaderT monad that,
-when executed, will read exactly the requested number of
-bytes. Executing the readData action will block until all data is
-read. The result value is a list of chunks, represented as
-ByteStrings. This representation was choosen for efficiency reasons.
+This function produces an action in the ChunkedReaderT monad that, when
+executed, will read exactly the requested number of bytes. Executing the
+readData action will block until all data is read. The result value is a list
+of chunks, represented as ByteStrings. This representation was choosen for
+efficiency reasons.
 
-Data is read in packets. The function may choose to request more than
-needed in order to get the highest possible bandwidth. The excess of
-bytes is kept as the state of the ChunkedReaderT monad. A subsequent
-invocation of readData will first return bytes from the stored state
-before requesting more from the device itself. A consequence of this
-behaviour is that even when you request 100 bytes the function will
-actually request 512 bytes (depending on the packet size) and /block/
-until all 512 bytes are read! There is no workaround since requesting
+Data is read in packets. The function may choose to request more than needed in
+order to get the highest possible bandwidth. The excess of bytes is kept as the
+state of the ChunkedReaderT monad. A subsequent invocation of readData will
+first return bytes from the stored state before requesting more from the device
+itself. A consequence of this behaviour is that even when you request 100 bytes
+the function will actually request 512 bytes (depending on the packet size) and
+/block/ until all 512 bytes are read! There is no workaround since requesting
 less bytes than the packet size is an error.
 
-USB timeouts will not interrupt readData. In case of a timeout
-readData will simply resume reading data. A small USB timeout can
-degrade performance.
+USB timeouts will not interrupt readData. In case of a timeout readData will
+simply resume reading data. A small USB timeout can degrade performance.
 
-The FTDI latency timer can cause poor performance. If the FTDI chip
-can't fill a packet before the latency timer fires it is forced to
-send an incomplete packet. This will cause a stream of tiny packets
-instead of a few large packets. Performance will suffer horribly, but
-the request will still be completed.
+The FTDI latency timer can cause poor performance. If the FTDI chip can't fill
+a packet before the latency timer fires it is forced to send an incomplete
+packet. This will cause a stream of tiny packets instead of a few large
+packets. Performance will suffer horribly, but the request will still be
+completed.
 
-If you need to make a lot of small requests then a small latency can
-actually improve performance.
+If you need to make a lot of small requests then a small latency can actually
+improve performance.
 
-Modem status bytes are filtered from the result. Every packet send by
-the FTDI chip contains 2 modem status bytes. They are not part of the
-data and do not count for the number of bytes read. They will not
-appear in the result.
+Modem status bytes are filtered from the result. Every packet send by the FTDI
+chip contains 2 modem status bytes. They are not part of the data and do not
+count for the number of bytes read. They will not appear in the result.
 
 Example:
 
@@ -417,8 +418,8 @@ readData ifHnd numBytes = ChunkedReaderT $
         -- 'readNumBytes' bytes of data.
         let reqSize    = packetSize ⋅ reqPackets
             reqPackets = readNumBytes `divRndUp` packetDataSize
-        -- Timeout is ignored; the number of bytes that was read
-        -- contains enough information.
+        -- Timeout is ignored; the number of bytes that was read contains
+        -- enough information.
         (bytes, _) ← liftIO $ readBulk ifHnd reqSize
 
         let receivedDataBytes   = receivedBytes - receivedHeaderBytes
@@ -440,7 +441,8 @@ readData ifHnd numBytes = ChunkedReaderT $
           else -- We might have received too much data, since we can only
                -- request multiples of 'packetSize' bytes. Split the byte
                -- string at such an index that the first part contains
-               -- readNumBytes of data bytes. The rest is kept for future usage.
+               -- readNumBytes of data bytes. The rest is kept for future
+               -- usage.
                let (bs, newRest) = BS.splitAt (splitIndex readNumBytes) bytes
                in put newRest >> return (splitPackets bs)
 
@@ -462,9 +464,8 @@ readData ifHnd numBytes = ChunkedReaderT $
 
 -- |Perform a bulk read.
 --
--- Returns the data that was read (in the form of a 'ByteString') and
--- a flag which indicates whether a timeout occured during the
--- request.
+-- Returns the data that was read (in the form of a 'ByteString') and a flag
+-- which indicates whether a timeout occured during the request.
 readBulk ∷ InterfaceHandle
          → Int -- ^Number of bytes to read
          → IO (ByteString, Bool)
@@ -476,8 +477,8 @@ readBulk ifHnd numBytes =
 
 -- |Perform a bulk write.
 --
--- Returns the number of bytes that where written and a flag which
--- indicates whether a timeout occured during the request.
+-- Returns the number of bytes that where written and a flag which indicates
+-- whether a timeout occured during the request.
 writeBulk ∷ InterfaceHandle
           → ByteString -- ^Data to be written
           → IO (Int, Bool)
@@ -503,11 +504,11 @@ type USBControl α = USB.DeviceHandle
 
 -- |Generic FTDI control request with explicit index
 genControl ∷ USBControl α
-           → Word16          -- ^Index
+           → Word16 -- ^Index
            → InterfaceHandle
            → RequestCode
            → RequestValue
-           → α               -- ^Value
+           → α
 genControl usbCtrl index ifHnd request value =
     usbCtrl usbHnd
             USB.Vendor
@@ -556,29 +557,28 @@ setLatencyTimer ifHnd latency = control ifHnd reqSetLatencyTimer
                                         $ fromIntegral latency
 
 -- |MPSSE bitbang modes
-data BitMode = -- |Switch off bitbang mode, back to regular
-               -- serial/FIFO.
+data BitMode = -- |Switch off bitbang mode, back to regular serial/FIFO.
                BitMode_Reset
-               -- |Classical asynchronous bitbang mode, introduced
-               -- with B-type chips.
+               -- |Classical asynchronous bitbang mode, introduced with B-type
+               -- chips.
              | BitMode_BitBang
-               -- |Multi-Protocol Synchronous Serial Engine, available
-               -- on 2232x chips.
+               -- |Multi-Protocol Synchronous Serial Engine, available on 2232x
+               -- chips.
              | BitMode_MPSSE
-               -- |Synchronous Bit-Bang Mode, available on 2232x and
-               -- R-type chips.
+               -- |Synchronous Bit-Bang Mode, available on 2232x and R-type
+               -- chips.
              | BitMode_SyncBitBang
                -- |MCU Host Bus Emulation Mode, available on 2232x
                -- chips. CPU-style fifo mode gets set via EEPROM.
              | BitMode_MCU
-               -- |Fast Opto-Isolated Serial Interface Mode, available
-               -- on 2232x chips.
+               -- |Fast Opto-Isolated Serial Interface Mode, available on 2232x
+               -- chips.
              | BitMode_Opto
-               -- |Bit-Bang on CBus pins of R-type chips, configure in
-               -- EEPROM before use.
+               -- |Bit-Bang on CBus pins of R-type chips, configure in EEPROM
+               -- before use.
              | BitMode_CBus
-               -- |Single Channel Synchronous FIFO Mode, available on
-               -- 2232H chips.
+               -- |Single Channel Synchronous FIFO Mode, available on 2232H
+               -- chips.
              | BitMode_SyncFIFO
               deriving (Eq, Ord, Show, Data, Typeable)
 
@@ -599,25 +599,35 @@ setBitMode ifHnd bitMask bitMode = control ifHnd reqSetBitMode value
           bitMode' = fromIntegral $ marshalBitMode bitMode
           value    = bitMask' .|. shiftL bitMode' 8
 
-
--- TODO: finish implementation (encoding divisor and subdivisor in index and
--- value fields of control request)
 -- TODO: baudrate is also a function of the bitmode (bitbang needs baudrate ⋅ 4)
-{-
-setConfiguration ∷ RealFrac α ⇒ InterfaceHandle → Word8 → BitMode → α → IO ()
-setConfiguration ifHnd bitMask bitMode baudRate = do
-  setBitMode ifHnd bitMask bitMode
-  genControl  USB.control
-              (error "TODO")
-              ifHnd
-              reqSetBaudRate
-              (error "TODO")
-    where (d, s, e) = calcBaudRateDivisors ( supportedSubDivisors
-                                           $ devChipType
-                                           $ devHndDev
-                                           $ ifHndDevHnd ifHnd
-                                           ) baudRate
--}
+setBaudRate ∷ RealFrac α ⇒ InterfaceHandle → α → IO ()
+setBaudRate ifHnd baudRate = genControl USB.control ix ifHnd reqSetBaudRate val
+  where
+    (val, ix) = encodeBaudRateDivisors chip d s
+    (d, s, _) = calcBaudRateDivisors (supportedSubDivisors chip) baudRate
+    chip = devChipType $ devHndDev $ ifHndDevHnd ifHnd
+
+-- http://www.ftdichip.com/Documents/AppNotes/AN232B-05_BaudRates.pdf
+encodeBaudRateDivisors ∷ ChipType → Int → Int → (Word16, Word16)
+encodeBaudRateDivisors chip d s = (v, i)
+  where
+    v = fromIntegral d .|. shiftL s' 14
+    i | ChipType_2232C ← chip = shiftL (shiftR s' 2) 8
+      | otherwise = shiftR s' 2
+    s' = fromIntegral $ encodeSubDiv s ∷ Word16
+
+    encodeSubDiv ∷ Int → Int
+    encodeSubDiv n =
+        case n of
+          0 → 0 -- 000 ==> 0/8 = 0
+          4 → 1 -- 001 ==> 4/8 = 0.5
+          2 → 2 -- 010 ==> 2/8 = 0.25
+          1 → 3 -- 011 ==> 1/8 = 0.125
+          3 → 4 -- 100 ==> 3/8 = 0.375
+          5 → 5 -- 101 ==> 5/8 = 0.625
+          6 → 6 -- 110 ==> 6/8 = 0.75
+          7 → 7 -- 111 ==> 7/8 = 0.875
+          _ → error "Illegal subdivisor"
 
 data Parity = -- |The parity bit is set to one if the number of ones in a given
               -- set of bits is even (making the total number of ones, including

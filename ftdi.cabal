@@ -1,28 +1,41 @@
 name:          ftdi
 version:       0.1
 cabal-version: >=1.6
-build-type:    Simple
+build-type:    Custom
 stability:     experimental
 author:        Roel van Dijk
 maintainer:    vandijk.roel@gmail.com
-copyright:     (c) 2009 Roel van Dijk
+copyright:     (c) 2009, 2010 Roel van Dijk
 license:       BSD3
 license-file:  LICENSE
 synopsis:      A thin layer over USB to communicate with FTDI chips
 category:      System
 
-flag test
-  description: Build the testing suite
-  default:     False
-
 source-repository head
   type:     darcs
   location: http://code.haskell.org/~roelvandijk/code/ftdi
 
+-------------------------------------------------------------------------------
+
+flag test
+  description: Build the testing suite
+  default:     False
+
+flag hpc
+  description: Enable program coverage on test executable
+  default:     False
+
+flag nolib
+  description: Don't build the library
+  default:     False
+
+-------------------------------------------------------------------------------
+
+
 library
   exposed-modules: System.FTDI
   other-modules: System.FTDI.Internal
-               , System.FTDI.Util
+               , System.FTDI.Utils
   build-depends: base                 >= 4       && < 4.3
                , base-unicode-symbols >= 0.1.1   && < 0.2
                , bytestring           >= 0.9.1.4 && < 0.10
@@ -31,12 +44,17 @@ library
                , usb                  >= 0.3     && < 0.4
   ghc-options: -Wall
 
+  if flag(nolib)
+    buildable: False
+
+-------------------------------------------------------------------------------
+
 executable test
   main-is: test.hs
   other-modules: System.FTDI.Internal
                , System.FTDI.Properties
-               , System.FTDI.Util
-               , System.FTDI.Util.Properties
+               , System.FTDI.Utils
+               , System.FTDI.Utils.Properties
   ghc-options: -Wall -fno-warn-orphans
 
   if flag(test)
@@ -49,3 +67,6 @@ executable test
     buildable: True
   else
     buildable: False
+
+  if flag(hpc)
+    ghc-options: -fhpc

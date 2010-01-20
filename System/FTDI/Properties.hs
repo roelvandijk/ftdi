@@ -12,7 +12,6 @@ module System.FTDI.Properties where
 -- base
 import Control.Applicative   ( liftA2 )
 import Control.Arrow         ( first )
-import Control.Monad         ( liftM )
 import Data.Bits             ( (.&.) )
 import Data.Bool             ( Bool )
 import Data.List             ( map )
@@ -20,10 +19,9 @@ import Data.Word             ( Word8 )
 import Data.Tuple            ( uncurry )
 
 -- base-unicode
-import Data.Bool.Unicode     ( (∧) )
 import Data.Eq.Unicode       ( (≡) )
 import Data.Function.Unicode ( (∘) )
-import Data.Ord.Unicode      ( (≤), (≥) )
+import Data.Ord.Unicode      ( (≤) )
 import Prelude.Unicode       ( (÷) )
 
 -- derive
@@ -44,11 +42,7 @@ import System.FTDI.Internal  ( marshalModemStatus
 -- QuickCheck
 import Test.QuickCheck       ( Arbitrary, arbitrary, shrink, choose
                              , arbitraryBoundedIntegral
-                             , arbitraryBoundedRandom
-                             , shrinkIntegral
-                             , shrinkRealFrac
-                             , frequency
-                             , Property, (==>)
+                             , shrinkIntegral, frequency
                              )
 
 -- random
@@ -75,20 +69,18 @@ prop_unmarshalModemStatus =
                    )
     where ignoreBits = first (.&. 0xf0)
 
-prop_calcBaudRateDivisor ∷ RealFrac α ⇒ ChipType → BaudRate α → Property
+prop_calcBaudRateDivisor ∷ RealFrac α ⇒ ChipType → BaudRate α → Bool
 prop_calcBaudRateDivisor chip baudRate =
     let subDivs   = supportedSubDivisors chip
         (d, s, e) = calcBaudRateDivisors subDivs baudRate
         baudRate' = calcBaudRate d (fromIntegral s ÷ 8)
-    in (baudRate ≥ minBaudRate ∧ baudRate ≤ maxBaudRate)
-       ==> abs (baudRate' - baudRate) ÷ baudRate ≤ e
+    in abs (baudRate' - baudRate) ÷ baudRate ≤ e
 
-prop_baudRateError ∷ RealFrac α ⇒ α → (ChipType → BaudRate α → Property)
+prop_baudRateError ∷ RealFrac α ⇒ α → (ChipType → BaudRate α → Bool)
 prop_baudRateError maxError = \chip baudRate →
     let subDivs   = supportedSubDivisors chip
         (_, _, e) = calcBaudRateDivisors subDivs baudRate
-    in (baudRate ≥ minBaudRate ∧ baudRate ≤ maxBaudRate)
-       ==> unBaudRate e ≤ maxError
+    in unBaudRate e ≤ maxError
 
 
 -------------------------------------------------------------------------------
