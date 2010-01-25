@@ -23,7 +23,7 @@ import Control.Monad             ( Functor
                                  , MonadPlus
                                  )
 import Control.Monad.Fix         ( MonadFix )
-import Data.Bool                 ( Bool(False, True), otherwise )
+import Data.Bool                 ( Bool, otherwise )
 import Data.Bits                 ( Bits, (.|.)
                                  , setBit, shiftL, shiftR, testBit
                                  )
@@ -148,6 +148,8 @@ valSetRTSLow  = 0x0200
 -- Defaults
 -------------------------------------------------------------------------------
 
+-- |Default USB timeout. The timeout can be set per device handle with
+-- the 'setTimeout' function.
 defaultTimeout ∷ Int
 defaultTimeout = 5000
 
@@ -156,12 +158,15 @@ defaultTimeout = 5000
 -- Devices
 -------------------------------------------------------------------------------
 
+-- |A representation of an FTDI device. 
 data Device = Device
     { devUSB      ∷ USB.Device
     , devUSBConf  ∷ USB.ConfigDesc
     , devChipType ∷ ChipType
     }
 
+-- |The type of FTDI chip in a 'Device'. The capabilities of a device
+-- depend on its chip type.
 data ChipType = ChipType_AM
               | ChipType_BM
               | ChipType_2232C
@@ -176,13 +181,22 @@ getChipType = devChipType
 setChipType ∷ Device → ChipType → Device
 setChipType dev ct = dev {devChipType = ct}
 
-fromUSBDevice ∷ USB.Device → ChipType → Device
+-- |Promote a USB device to an FTDI device. You are responsible for
+-- supplying the correct USB device and specifying the correct chip
+-- type. There is no failsafe way to automatically determine whether a
+-- random USB device is an actual FTDI device.
+fromUSBDevice ∷ USB.Device -- ^ USB device
+              → ChipType
+              → Device     -- ^ FTDI device
 fromUSBDevice dev chip =
   Device { devUSB      = dev
          , devUSBConf  = head ∘ USB.deviceConfigs $ USB.deviceDesc dev
          , devChipType = chip
          }
 
+-- |Tries to guess the type of the FTDI chip by looking at the USB
+-- device release number of a device's descriptor. Each FTDI chip uses
+-- a specific release number to indicate its type.
 guessChipType ∷ USB.DeviceDesc → Maybe ChipType
 guessChipType desc = case USB.deviceReleaseNumber desc of
                        -- Workaround for bug in BM type chips
@@ -200,6 +214,9 @@ guessChipType desc = case USB.deviceReleaseNumber desc of
 -- Interfaces
 -------------------------------------------------------------------------------
 
+-- |A device interface. You can imagine an interface as a port or a
+-- communication channel. Some devices support communication over
+-- multiple interfaces at the same time.
 data Interface = Interface_A
                | Interface_B
                | Interface_C
@@ -228,21 +245,27 @@ interfaceEndPointOut i =
 -- Device Handles
 -------------------------------------------------------------------------------
 
+-- |You need a handle in order to communicate with a 'Device'.
 data DeviceHandle = DeviceHandle
     { devHndUSB     ∷ USB.DeviceHandle
     , devHndDev     ∷ Device
     , devHndTimeout ∷ Int
     }
 
+-- |Perform a USB device reset.
 resetUSB ∷ DeviceHandle → IO ()
 resetUSB = USB.resetDevice ∘ devHndUSB
 
+-- |Returns the USB timeout associated with a handle.
 getTimeout ∷ DeviceHandle → Int
 getTimeout = devHndTimeout
 
+-- |Modifies the USB timeout associated with a handle.
 setTimeout ∷ DeviceHandle → Int → DeviceHandle
 setTimeout devHnd timeout = devHnd {devHndTimeout = timeout}
 
+-- |Open a device handle to enable communication. Only use this if you
+-- can't use 'withDeviceHandle' for some reason.
 openDevice ∷ Device → IO DeviceHandle
 openDevice dev = do
   handle ← USB.openDevice $ devUSB dev
@@ -252,9 +275,13 @@ openDevice dev = do
                       , devHndTimeout = defaultTimeout
                       }
 
+-- |Release a device handle.
 closeDevice ∷ DeviceHandle → IO ()
 closeDevice = USB.closeDevice ∘ devHndUSB
 
+-- |The recommended way to acquire a handle. Ensures that the handles
+-- is released when the monadic computation is completed. Even, or
+-- especially, when an exception is thrown.
 withDeviceHandle ∷ Device → (DeviceHandle → IO α) → IO α
 withDeviceHandle dev = bracket (openDevice dev) closeDevice
 
@@ -310,7 +337,6 @@ withInterfaceHandle h i = bracket (openInterface h i) closeInterface
 -- Data transfer
 -------------------------------------------------------------------------------
 
--- |
 newtype ChunkedReaderT m α = ChunkedReaderT {unCR ∷ StateT ByteString m α}
     deriving ( Functor
              , Applicative
@@ -544,6 +570,7 @@ purgeWriteBuffer ifHnd = control ifHnd reqReset valPurgeWriteBuffer
 
 -------------------------------------------------------------------------------
 
+-- |Returns the current value of the FTDI latency timer.
 getLatencyTimer ∷ InterfaceHandle → IO Word8
 getLatencyTimer ifHnd = do
     (bs, _) ← readControl ifHnd reqGetLatencyTimer 0 1
@@ -551,6 +578,9 @@ getLatencyTimer ifHnd = do
       [b] → return b
       _   → error "System.FTDI.getLatencyTimer: failed"
 
+-- |Set the FTDI latency timer. The latency is the amount of
+-- milliseconds after which the FTDI chip will send a packet
+-- regardless of the number of bytes in the packet.
 setLatencyTimer ∷ InterfaceHandle → Word8 → IO ()
 setLatencyTimer ifHnd latency = control ifHnd reqSetLatencyTimer
                                         $ fromIntegral latency
@@ -592,14 +622,24 @@ marshalBitMode bm = case bm of
                       BitMode_CBus        → 0x20
                       BitMode_SyncFIFO    → 0x40
 
+-- |The bitmode controls the method of communication.
 setBitMode ∷ InterfaceHandle → Word8 → BitMode → IO ()
 setBitMode ifHnd bitMask bitMode = control ifHnd reqSetBitMode value
     where bitMask' = fromIntegral bitMask
           bitMode' = fromIntegral $ marshalBitMode bitMode
           value    = bitMask' .|. shiftL bitMode' 8
 
--- TODO: baudrate is also a function of the current bitmode
--- (bitbang needs baudrate ⋅ 4)
+-- |Sets the baud rate. Internally the baud rate is represented as a
+-- fraction. The maximum baudrate is the numerator and a special
+-- /divisor/ is used as the denominator. The maximum baud rate is
+-- given by the 'BaudRate' instance for 'Bounded'. The divisor
+-- consists of an integral part and a fractional part. Both parts are
+-- limited in range. As a result not all baud rates can be accurately
+-- represented. This function returns the nearest representable baud
+-- rate relative to the requested baud rate. According to FTDI
+-- documentation the maximum allowed error is 3%. The nearest
+-- representable baud rate can be calculated with the
+-- 'nearestBaudRate' function.
 setBaudRate ∷ RealFrac α ⇒ InterfaceHandle → BaudRate α → IO (BaudRate α)
 setBaudRate ifHnd baudRate =
   do genControl USB.control ix ifHnd reqSetBaudRate val
@@ -726,6 +766,7 @@ unmarshalModemStatus a b =
                 , msErrorInReceiverFIFO        = testBit b 7
                 }
 
+-- |Manually request the modem status.
 pollModemStatus ∷ InterfaceHandle → IO ModemStatus
 pollModemStatus ifHnd = do
     (bs, _) ← readControl ifHnd reqPollModemStatus 0 2
@@ -803,6 +844,8 @@ instance Num α ⇒ Bounded (BRSubDiv α) where
     minBound = 0
     maxBound = 7
 
+-- |Representation of a baud rate. The most interesting part is the
+-- instance for 'Bounded'.
 newtype BaudRate α = BaudRate {unBaudRate ∷ α}
     deriving ( Eq, Ord, Show, Read, Enum, Num, Integral
              , Real, Fractional, RealFrac

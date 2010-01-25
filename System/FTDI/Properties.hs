@@ -15,10 +15,7 @@ module System.FTDI.Properties where
 import Control.Applicative   ( liftA2 )
 import Control.Arrow         ( first )
 import Data.Bits             ( (.&.) )
-import Data.Bool             ( Bool )
-import Data.List             ( map )
 import Data.Word             ( Word8 )
-import Data.Tuple            ( uncurry )
 
 -- base-unicode
 import Data.Eq.Unicode       ( (≡) )

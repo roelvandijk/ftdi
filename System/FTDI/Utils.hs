@@ -17,7 +17,7 @@ import Data.Ord                  ( Ord, min, max )
 import Prelude                   ( Enum, Bounded, minBound, maxBound
                                  , Num, (+), Integral
                                  , fromEnum, fromInteger, fromIntegral
-                                 , divMod, error
+                                 , divMod
                                  )
 
 -- base-unicode-symbols

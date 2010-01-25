@@ -68,11 +68,6 @@ module System.FTDI
     , ModemStatus(..)
     , pollModemStatus
 
-      -- ** Low level
-    , control
-    , readControl
-    , writeControl
-
       -- *Flow control
     , FlowCtrl(..)
     , setFlowControl

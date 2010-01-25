@@ -3,13 +3,16 @@ version:       0.1
 cabal-version: >=1.6
 build-type:    Custom
 stability:     experimental
-author:        Roel van Dijk
-maintainer:    vandijk.roel@gmail.com
+author:        Roel van Dijk <vandijk.roel@gmail.com>
+maintainer:    Roel van Dijk <vandijk.roel@gmail.com>
 copyright:     (c) 2009, 2010 Roel van Dijk
 license:       BSD3
 license-file:  LICENSE
-synopsis:      A thin layer over USB to communicate with FTDI chips
 category:      System
+synopsis:      A thin layer over USB to communicate with FTDI chips
+description:   
+  This library enables you to communicate with FTDI devices. It is
+  implemented as a lightweight wrapper around the usb library.
 
 source-repository head
   type:     darcs
@@ -58,12 +61,12 @@ executable test
   ghc-options: -Wall -fno-warn-orphans
 
   if flag(test)
-    build-depends: QuickCheck                 >= 2.1.0 && < 2.2
+    build-depends: derive                     >= 2.3   && < 2.4
+                 , QuickCheck                 >= 2.1.0 && < 2.2
+                 , random                     >= 1.0.0 && < 1.1
+                 , tagged                     >= 0.0   && < 0.1
                  , test-framework             >= 0.2.4 && < 0.3
                  , test-framework-quickcheck2 >= 0.2.4 && < 0.3
-                 , random                     >= 1.0.0 && < 1.1
-                 , derive                     >= 2.3   && < 2.4
-                 , tagged                     >= 0.0   && < 0.1
     buildable: True
   else
     buildable: False

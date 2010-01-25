@@ -7,7 +7,7 @@ module System.FTDI.Utils.Properties where
 
 -- base
 import Control.Monad ( (>>) )
-import Data.Bool     ( Bool, otherwise )
+import Data.Bool     ( otherwise )
 import Data.Function ( ($) )
 import Data.Ord      ( Ord )
 import Prelude       ( Integral, RealFrac, Fractional, Double
