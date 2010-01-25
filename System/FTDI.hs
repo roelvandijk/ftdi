@@ -60,6 +60,9 @@ module System.FTDI
     , BitDataFormat(..)
     , StopBits(..)
     , setLineProperty
+    , BaudRate(..)
+    , nearestBaudRate
+    , setBaudRate
 
       -- **Modem status
     , ModemStatus(..)
@@ -78,15 +81,8 @@ module System.FTDI
     , setEventCharacter
     , setErrorCharacter
 
-      -- *Constants
-    , minBaudRate
-    , maxBaudRate
-
       -- *Defaults
     , defaultTimeout
-
-      -- *Miscellaneous
-    , calcBaudRateDivisors
     ) where
 
 import System.FTDI.Internal

@@ -1,5 +1,6 @@
-{-# LANGUAGE NoImplicitPrelude #-}
-{-# LANGUAGE UnicodeSyntax #-}
+{-# LANGUAGE NoImplicitPrelude
+           , UnicodeSyntax
+  #-}
 
 module System.FTDI.Utils where
 
@@ -8,18 +9,21 @@ module System.FTDI.Utils where
 -------------------------------------------------------------------------------
 
 -- base
+import Data.Bool                 ( Bool )
 import Data.Bits                 ( Bits, (.|.), (.&.), complement )
 import Data.Function             ( ($) )
 import Data.List                 ( foldr )
 import Data.Ord                  ( Ord, min, max )
-import Prelude                   ( Enum
+import Prelude                   ( Enum, Bounded, minBound, maxBound
                                  , Num, (+), Integral
                                  , fromEnum, fromInteger, fromIntegral
                                  , divMod, error
                                  )
 
 -- base-unicode-symbols
+import Data.Bool.Unicode         ( (∧) )
 import Data.Eq.Unicode           ( (≢) )
+import Data.Ord.Unicode          ( (≤) )
 import Data.Function.Unicode     ( (∘) )
 
 
@@ -36,8 +40,8 @@ orBits = foldr (.|.) 0
 andBits ∷ Bits α ⇒ [α] → α
 andBits = foldr (.&.) $ complement 0
 
-clamp ∷ Ord α ⇒ α → α → α → α
-clamp lo hi = atLeast lo ∘ atMost hi
+clamp ∷ (Bounded α, Ord α) ⇒ α → α
+clamp = atLeast minBound ∘ atMost maxBound
 
 atLeast ∷ Ord α ⇒ α → α → α
 atLeast = max
@@ -48,3 +52,6 @@ atMost = min
 divRndUp ∷ Integral α ⇒ α → α → α
 divRndUp x y = let (d, m) = x `divMod` y
                in d + if m ≢ 0 then 1 else 0
+
+between ∷ Ord α ⇒ α → α → α → Bool
+between lo hi x = lo ≤ x ∧ x ≤ hi

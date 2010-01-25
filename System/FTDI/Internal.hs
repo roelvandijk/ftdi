@@ -1,11 +1,12 @@
-{-# LANGUAGE CPP #-}
-{-# LANGUAGE DeriveDataTypeable #-}
-{-# LANGUAGE FlexibleContexts #-}
-{-# LANGUAGE GeneralizedNewtypeDeriving #-}
-{-# LANGUAGE NoImplicitPrelude #-}
-{-# LANGUAGE PatternGuards #-}
-{-# LANGUAGE ScopedTypeVariables #-}
-{-# LANGUAGE UnicodeSyntax #-}
+{-# LANGUAGE CPP
+           , DeriveDataTypeable
+           , FlexibleContexts
+           , GeneralizedNewtypeDeriving
+           , NoImplicitPrelude
+           , PatternGuards
+           , ScopedTypeVariables
+           , UnicodeSyntax
+  #-}
 
 module System.FTDI.Internal where
 
@@ -37,14 +38,16 @@ import Data.Tuple                ( fst, snd )
 import Data.Typeable             ( Typeable )
 import Data.Word                 ( Word8, Word16 )
 import Prelude                   ( Enum, succ
+                                 , Bounded, minBound, maxBound
                                  , Num, (+), (-), Integral, (^)
-                                 , Fractional, RealFrac
+                                 , Fractional, Real, RealFrac
                                  , Double, Integer
                                  , fromEnum, fromInteger, fromIntegral
-                                 , abs, realToFrac, floor, ceiling
+                                 , realToFrac, floor, ceiling
                                  , div, error
                                  )
 import System.IO                 ( IO )
+import Text.Read                 ( Read )
 import Text.Show                 ( Show )
 
 -- base-unicode-symbols
@@ -166,10 +169,6 @@ data ChipType = ChipType_AM
               | ChipType_2232H
               | ChipType_4232H
                 deriving (Enum, Eq, Ord, Show, Data, Typeable)
-
-supportedSubDivisors ∷ ChipType → [Int]
-supportedSubDivisors ChipType_AM = [0, 1, 2, 4]
-supportedSubDivisors _           = [0..7]
 
 getChipType ∷ Device → ChipType
 getChipType = devChipType
@@ -599,35 +598,17 @@ setBitMode ifHnd bitMask bitMode = control ifHnd reqSetBitMode value
           bitMode' = fromIntegral $ marshalBitMode bitMode
           value    = bitMask' .|. shiftL bitMode' 8
 
--- TODO: baudrate is also a function of the bitmode (bitbang needs baudrate ⋅ 4)
-setBaudRate ∷ RealFrac α ⇒ InterfaceHandle → α → IO ()
-setBaudRate ifHnd baudRate = genControl USB.control ix ifHnd reqSetBaudRate val
+-- TODO: baudrate is also a function of the current bitmode
+-- (bitbang needs baudrate ⋅ 4)
+setBaudRate ∷ RealFrac α ⇒ InterfaceHandle → BaudRate α → IO (BaudRate α)
+setBaudRate ifHnd baudRate =
+  do genControl USB.control ix ifHnd reqSetBaudRate val
+     return b
   where
     (val, ix) = encodeBaudRateDivisors chip d s
-    (d, s, _) = calcBaudRateDivisors (supportedSubDivisors chip) baudRate
+    (d, s, b) = calcBaudRateDivisors chip baudRate
     chip = devChipType $ devHndDev $ ifHndDevHnd ifHnd
 
--- http://www.ftdichip.com/Documents/AppNotes/AN232B-05_BaudRates.pdf
-encodeBaudRateDivisors ∷ ChipType → Int → Int → (Word16, Word16)
-encodeBaudRateDivisors chip d s = (v, i)
-  where
-    v = fromIntegral d .|. shiftL s' 14
-    i | ChipType_2232C ← chip = shiftL (shiftR s' 2) 8
-      | otherwise = shiftR s' 2
-    s' = fromIntegral $ encodeSubDiv s ∷ Word16
-
-    encodeSubDiv ∷ Int → Int
-    encodeSubDiv n =
-        case n of
-          0 → 0 -- 000 ==> 0/8 = 0
-          4 → 1 -- 001 ==> 4/8 = 0.5
-          2 → 2 -- 010 ==> 2/8 = 0.25
-          1 → 3 -- 011 ==> 1/8 = 0.125
-          3 → 4 -- 100 ==> 3/8 = 0.375
-          5 → 5 -- 101 ==> 5/8 = 0.625
-          6 → 6 -- 110 ==> 6/8 = 0.75
-          7 → 7 -- 111 ==> 7/8 = 0.875
-          _ → error "Illegal subdivisor"
 
 data Parity = -- |The parity bit is set to one if the number of ones in a given
               -- set of bits is even (making the total number of ones, including
@@ -801,47 +782,97 @@ setErrorCharacter = genSetCharacter reqSetErrorChar
 
 
 -------------------------------------------------------------------------------
--- Miscellaneous
+-- Baud rate
 -------------------------------------------------------------------------------
 
-maxBaudRate ∷ Num α ⇒ α
-maxBaudRate = 3000000
+newtype BRDiv α = BRDiv {unBRDiv ∷ α}
+    deriving ( Eq, Ord, Show, Read, Enum, Num, Integral
+             , Real, Fractional, RealFrac
+             )
 
--- Minimum baud rate is the maximum baudrate divided by the largest
--- possible divider.
-minBaudRate ∷ Num α ⇒ α
-minBaudRate = fromIntegral
-              $ (ceiling ∷ Double → Integer)
-              $ (maxBaudRate ÷ 2 ^ (14 ∷ Int) - 1 + 7 ÷ 8)
+instance Num α ⇒ Bounded (BRDiv α) where
+    minBound = 0
+    maxBound = 2 ^ (14 ∷ Int) - 1
+
+newtype BRSubDiv α = BRSubDiv {unBRSubDiv ∷ α}
+    deriving ( Eq, Ord, Show, Read, Enum, Num, Integral
+             , Real, Fractional, RealFrac
+             )
+
+instance Num α ⇒ Bounded (BRSubDiv α) where
+    minBound = 0
+    maxBound = 7
+
+newtype BaudRate α = BaudRate {unBaudRate ∷ α}
+    deriving ( Eq, Ord, Show, Read, Enum, Num, Integral
+             , Real, Fractional, RealFrac
+             )
+
+instance Num α ⇒ Bounded (BaudRate α) where
+    -- Minimum baud rate is the maximum baudrate divided by the
+    -- largest possible divider.
+    minBound = fromIntegral
+               $ (ceiling ∷ BaudRate Double → BaudRate Integer)
+               $ calcBaudRate maxBound maxBound
+
+    maxBound = BaudRate 3000000
+
+-- http://www.ftdichip.com/Documents/AppNotes/AN232B-05_BaudRates.pdf
+encodeBaudRateDivisors ∷ ChipType → BRDiv Int → BRSubDiv Int → (Word16, Word16)
+encodeBaudRateDivisors chip d s = (v, i)
+  where
+    v = fromIntegral d .|. shiftL s' 14
+    i | ChipType_2232C ← chip = shiftL (shiftR s' 2) 8
+      | otherwise = shiftR s' 2
+    s' = fromIntegral $ encodeSubDiv s ∷ Word16
+
+    encodeSubDiv ∷ BRSubDiv Int → Int
+    encodeSubDiv n =
+        case n of
+          0 → 0 -- 000 ==> 0/8 = 0
+          4 → 1 -- 001 ==> 4/8 = 0.5
+          2 → 2 -- 010 ==> 2/8 = 0.25
+          1 → 3 -- 011 ==> 1/8 = 0.125
+          3 → 4 -- 100 ==> 3/8 = 0.375
+          5 → 5 -- 101 ==> 5/8 = 0.625
+          6 → 6 -- 110 ==> 6/8 = 0.75
+          7 → 7 -- 111 ==> 7/8 = 0.875
+          _ → error "Illegal subdivisor"
+
+-- |Calculates the nearest representable baud rate.
+nearestBaudRate ∷ RealFrac α ⇒ ChipType → BaudRate α → BaudRate α
+nearestBaudRate chip baudRate = b
+  where (_, _, b) = calcBaudRateDivisors chip baudRate
+
 
 -- |Finds the divisors that most closely represent the requested baud rate.
---
--- The subdivisors are divided by 8.
 calcBaudRateDivisors ∷ ∀ α. RealFrac α
-                     ⇒ [Int]         -- ^Acceptable subdivisors
-                     → α             -- ^Baud rate
-                     → (Int, Int, α) -- ^(divisor, subdivisor, error)
-calcBaudRateDivisors _  3000000  = (0, 0, 0)
-calcBaudRateDivisors _  2000000  = (1, 0, 0)
-calcBaudRateDivisors ss baudRate =
+                     ⇒ ChipType
+                     → BaudRate α
+                     → (BRDiv Int, BRSubDiv Int, BaudRate α)
+calcBaudRateDivisors _    3000000  = (0, 0, 0)
+calcBaudRateDivisors _    2000000  = (1, 0, 0)
+calcBaudRateDivisors chip baudRate =
     minimumBy (compare `on` (\(_,_,x) → x))
-              [ (d, s, (abs $ baudRate - b') ÷ baudRate)
-              | s ← ss
+              [ (d, s, b')
+              | s ← chipSubDivisors chip
               , let s' = fromIntegral s ÷ 8
-                    -- The calculated divisor is clamped to an acceptable
-                    -- range.
-                    d  = clamp 2 (2 ^ (14 ∷ Int) - 1)
-                               $ divisor baudRate s'
+                    d  = divisor baudRate s'
                     -- Baud rate calculated from found divisors.
                     b' = calcBaudRate d s'
               ]
     where
       -- |Calculates the divisor from a baud rate and a subdivisor.
-      divisor ∷ Integral β ⇒ α → α → β
-      divisor br s = floor $ (maxBaudRate - br ⋅ s) ÷ br
+      divisor ∷ Integral β ⇒ BaudRate α → BRSubDiv α → BRDiv β
+      divisor br s = clamp $ floor $ (maxBound - br ⋅ s') ÷ br
+          where s' = BaudRate $ unBRSubDiv s
+
+      chipSubDivisors ∷ ChipType → [BRSubDiv Int]
+      chipSubDivisors ChipType_AM = [0, 1, 2, 4]
+      chipSubDivisors _           = [0..7]
 
 -- |Calculates the baud rate from a divisor and a subdivisor.
-calcBaudRate ∷ Fractional α ⇒ Int → α → α
-calcBaudRate 0 0 = 3000000
+calcBaudRate ∷ Fractional α ⇒ BRDiv Int → BRSubDiv α → BaudRate α
+calcBaudRate 0 0 = maxBound
 calcBaudRate 1 0 = 2000000
-calcBaudRate d s = maxBaudRate ÷ (realToFrac d + s)
+calcBaudRate d s = maxBound ÷ BaudRate (realToFrac d + unBRSubDiv s)

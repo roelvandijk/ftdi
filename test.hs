@@ -1,6 +1,7 @@
-{-# LANGUAGE NoImplicitPrelude #-}
-{-# LANGUAGE ScopedTypeVariables #-}
-{-# LANGUAGE UnicodeSyntax #-}
+{-# LANGUAGE NoImplicitPrelude
+           , ScopedTypeVariables
+           , UnicodeSyntax
+  #-}
 
 module Main where
 
@@ -11,7 +12,7 @@ import Data.Function   ( ($) )
 import Data.Int        ( Int )
 import Data.Ord        ( Ord )
 import Data.Word       ( Word8 )
-import Prelude         ( Num, Integral, Integer
+import Prelude         ( Num, Integral, Integer, Bounded
                        , RealFrac, Float, Double
                        , fromRational
                        )
@@ -28,11 +29,9 @@ import Test.Framework.Providers.QuickCheck2 ( testProperty )
 import Test.QuickCheck
 
 -- ftdi
-import System.FTDI                  ( ChipType )
-import System.FTDI.Properties       ( BaudRate
-                                    , prop_marshalModemStatus
+import System.FTDI                  ( ChipType, BaudRate )
+import System.FTDI.Properties       ( prop_marshalModemStatus
                                     , prop_unmarshalModemStatus
-                                    , prop_calcBaudRateDivisor
                                     , prop_baudRateError
                                     )
 import System.FTDI.Utils.Properties ( prop_divRndUp_min
@@ -66,19 +65,13 @@ tests =
         [ test_baudRate_error "Float"  (0.05 ∷ Float)
         , test_baudRate_error "Double" (0.05 ∷ Double)
         ]
-      , testGroup "calculate divisor"
-        [ unTagged (test_baudRate_divisor "Float"  ∷ Tagged Float  Test)
-        , unTagged (test_baudRate_divisor "Double" ∷ Tagged Double Test)
-        ]
       ]
     ]
   , testGroup "utilities"
     [ testGroup "clamp"
-      [ unTagged (test_clamp "Integer" ∷ Tagged Integer Test)
-      , unTagged (test_clamp "Int"     ∷ Tagged Int     Test)
-      , unTagged (test_clamp "Word8"   ∷ Tagged Word8   Test)
-      , unTagged (test_clamp "Float"   ∷ Tagged Float   Test)
-      , unTagged (test_clamp "Double"  ∷ Tagged Double  Test)
+      [ unTagged (test_clamp "Int"      ∷ Tagged Int            Test)
+      , unTagged (test_clamp "Word8"    ∷ Tagged Word8          Test)
+      , unTagged (test_clamp "BaudRate" ∷ Tagged (BaudRate Int) Test)
       ]
     , testGroup "divRndUp"
       [ testGroup "min"
@@ -109,13 +102,9 @@ test_baudRate_error ∷ ∀ α. (Arbitrary α, Random α, Num α, RealFrac α) �
 test_baudRate_error n e =
     testProperty n (prop_baudRateError e ∷ ChipType → BaudRate α → Bool)
 
-test_baudRate_divisor ∷ ∀ α. (Arbitrary α, Random α, Num α, RealFrac α) ⇒ String → Tagged α Test
-test_baudRate_divisor n =
-    Tagged $ testProperty n (prop_calcBaudRateDivisor ∷ ChipType → BaudRate α → Bool)
-
-test_clamp ∷ ∀ α. (Arbitrary α, Ord α, Show α) ⇒ String → Tagged α Test
+test_clamp ∷ ∀ α. (Arbitrary α, Bounded α, Ord α, Show α) ⇒ String → Tagged α Test
 test_clamp n =
-    Tagged $ testProperty n (prop_clamp ∷ α → α → α → Property)
+    Tagged $ testProperty n (prop_clamp ∷ α → Property)
 
 test_divRndUp_min ∷ ∀ α. (Arbitrary α, Integral α) ⇒ String → Tagged α Test
 test_divRndUp_min n =

@@ -36,12 +36,12 @@ library
   exposed-modules: System.FTDI
   other-modules: System.FTDI.Internal
                , System.FTDI.Utils
-  build-depends: base                 >= 4       && < 4.3
-               , base-unicode-symbols >= 0.1.1   && < 0.2
-               , bytestring           >= 0.9.1.4 && < 0.10
-               , safe                 >= 0.2     && < 0.3
-               , transformers         >= 0.1.4   && < 0.2
-               , usb                  >= 0.3     && < 0.4
+  build-depends: base                 >= 4     && < 4.3
+               , base-unicode-symbols >= 0.1.1 && < 0.2
+               , bytestring           >= 0.9.1 && < 0.10
+               , safe                 >= 0.2   && < 0.3
+               , transformers         >= 0.1.4 && < 0.2
+               , usb                  >= 0.3   && < 0.4
   ghc-options: -Wall
 
   if flag(nolib)
@@ -58,12 +58,12 @@ executable test
   ghc-options: -Wall -fno-warn-orphans
 
   if flag(test)
-    build-depends: QuickCheck                 >= 2.1.0   && < 2.2
-                 , test-framework             >= 0.2.4   && < 0.3
-                 , test-framework-quickcheck2 >= 0.2.4   && < 0.3
-                 , random                     >= 1.0.0   && < 1.1
-                 , derive                     >= 2.3     && < 2.4
-                 , tagged                     >= 0.0     && < 0.1
+    build-depends: QuickCheck                 >= 2.1.0 && < 2.2
+                 , test-framework             >= 0.2.4 && < 0.3
+                 , test-framework-quickcheck2 >= 0.2.4 && < 0.3
+                 , random                     >= 1.0.0 && < 1.1
+                 , derive                     >= 2.3   && < 2.4
+                 , tagged                     >= 0.0   && < 0.1
     buildable: True
   else
     buildable: False

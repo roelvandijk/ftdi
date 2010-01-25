@@ -1,5 +1,7 @@
-{-# LANGUAGE NoImplicitPrelude #-}
-{-# LANGUAGE UnicodeSyntax #-}
+{-# LANGUAGE NoImplicitPrelude
+           , ScopedTypeVariables
+           , UnicodeSyntax
+  #-}
 
 module System.FTDI.Utils.Properties where
 
@@ -9,6 +11,7 @@ import Data.Bool     ( Bool, otherwise )
 import Data.Function ( ($) )
 import Data.Ord      ( Ord )
 import Prelude       ( Integral, RealFrac, Fractional, Double
+                     , Bounded, minBound, maxBound
                      , fromInteger, toInteger, fromIntegral
                      , (+), abs, mod, ceiling, div
                      )
@@ -50,9 +53,10 @@ prop_divRndUp_ceilFrac x y = y ≢ 0 ==>
 prop_divRndUp2 ∷ Integral α ⇒ α → α → Property
 prop_divRndUp2 x y = y ≢ 0 ==> divRndUp x y ≡ divRndUp2 x y
 
-prop_clamp ∷ Ord α ⇒ α → α → α → Property
-prop_clamp lo hi x = lo ≤ hi ==> lo ≤ cx ∧ cx ≤ hi
-    where cx = clamp lo hi x
+prop_clamp ∷ ∀ α. (Bounded α, Ord α) ⇒ α → Property
+prop_clamp x = (minBound ∷ α) ≤ (maxBound ∷ α)
+               ==> minBound ≤ cx ∧ cx ≤ maxBound
+    where cx = clamp x
 
 -------------------------------------------------------------------------------
 
