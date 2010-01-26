@@ -158,7 +158,7 @@ defaultTimeout = 5000
 -- Devices
 -------------------------------------------------------------------------------
 
--- |A representation of an FTDI device. 
+-- |A representation of an FTDI device.
 data Device = Device
     { devUSB      ∷ USB.Device
     , devUSBConf  ∷ USB.ConfigDesc
@@ -279,7 +279,7 @@ openDevice dev = do
 closeDevice ∷ DeviceHandle → IO ()
 closeDevice = USB.closeDevice ∘ devHndUSB
 
--- |The recommended way to acquire a handle. Ensures that the handles
+-- |The recommended way to acquire a handle. Ensures that the handle
 -- is released when the monadic computation is completed. Even, or
 -- especially, when an exception is thrown.
 withDeviceHandle ∷ Device → (DeviceHandle → IO α) → IO α
@@ -387,13 +387,13 @@ runChunkedReaderT = runStateT ∘ unCR
 
 This function produces an action in the ChunkedReaderT monad that, when
 executed, will read exactly the requested number of bytes. Executing the
-readData action will block until all data is read. The result value is a list
+readData action will block until all data are read. The result value is a list
 of chunks, represented as ByteStrings. This representation was choosen for
 efficiency reasons.
 
-Data is read in packets. The function may choose to request more than needed in
-order to get the highest possible bandwidth. The excess of bytes is kept as the
-state of the ChunkedReaderT monad. A subsequent invocation of readData will
+Data are read in packets. The function may choose to request more than needed
+in order to get the highest possible bandwidth. The excess of bytes is kept as
+the state of the ChunkedReaderT monad. A subsequent invocation of readData will
 first return bytes from the stored state before requesting more from the device
 itself. A consequence of this behaviour is that even when you request 100 bytes
 the function will actually request 512 bytes (depending on the packet size) and
@@ -466,8 +466,7 @@ readData ifHnd numBytes = ChunkedReaderT $
           else -- We might have received too much data, since we can only
                -- request multiples of 'packetSize' bytes. Split the byte
                -- string at such an index that the first part contains
-               -- readNumBytes of data bytes. The rest is kept for future
-               -- usage.
+               -- readNumBytes of data. The rest is kept for future usage.
                let (bs, newRest) = BS.splitAt (splitIndex readNumBytes) bytes
                in put newRest >> return (splitPackets bs)
 
@@ -489,7 +488,7 @@ readData ifHnd numBytes = ChunkedReaderT $
 
 -- |Perform a bulk read.
 --
--- Returns the data that was read (in the form of a 'ByteString') and a flag
+-- Returns the bytes that where read (in the form of a 'ByteString') and a flag
 -- which indicates whether a timeout occured during the request.
 readBulk ∷ InterfaceHandle
          → Int -- ^Number of bytes to read
