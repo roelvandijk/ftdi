@@ -24,6 +24,9 @@ import Control.Monad             ( Functor
                                  )
 import Control.Monad.Fix         ( MonadFix )
 import Data.Bool                 ( Bool, otherwise )
+#ifdef __HADDOCK__
+import Data.Bool                 ( Bool(False, True) )
+#endif
 import Data.Bits                 ( Bits, (.|.)
                                  , setBit, shiftL, shiftR, testBit
                                  )
@@ -57,10 +60,9 @@ import Data.Monoid.Unicode       ( (⊕) )
 import Prelude.Unicode           ( (⋅), (÷) )
 
 -- bytestring
-import qualified Data.ByteString as BS ( drop, length, null, splitAt, unpack )
-#ifdef __HADDOCK__
-import qualified Data.ByteString as BS ( empty )
-#endif
+import qualified Data.ByteString as BS ( empty, drop, length
+                                       , null, splitAt, unpack
+                                       )
 import Data.ByteString           ( ByteString )
 
 -- ftdi
@@ -70,7 +72,7 @@ import System.FTDI.Utils         ( divRndUp, clamp, genFromEnum, orBits )
 import Safe                      ( atMay, headMay )
 
 -- transformers
-import Control.Monad.Trans       ( MonadTrans, MonadIO, liftIO )
+import Control.Monad.Trans       ( MonadTrans, MonadIO, lift, liftIO )
 import Control.Monad.Trans.State ( StateT, get, put, runStateT )
 
 -- usb
@@ -360,9 +362,9 @@ through subsequent invocations of runChunkedReaderT:
 @
   example &#x2237; 'InterfaceHandle' &#x2192; IO ()
   example ifHnd = do
-    (packets1, rest1) &#x2190; runChunkedReaderT ('readData' ifHnd 400) 'BS.empty'
+    (packets1, rest1) &#x2190; runChunkedReaderT ('readData' ifHnd (return 'False') 400) 'BS.empty'
     print $ 'BS.concat' packets1
-    (packets2, rest2) &#x2190; runChunkedReaderT ('readData' ifHnd 200) rest1
+    (packets2, rest2) &#x2190; runChunkedReaderT ('readData' ifHnd (return 'False') 200) rest1
     print $ 'BS.concat' packets2
 @
 
@@ -372,9 +374,9 @@ plumbing:
 @
   example &#x2237; 'InterfaceHandle' &#x2192; IO ()
   example ifHnd =
-    let reader = do packets1 &#x2190; 'readData' ifHnd 400
+    let reader = do packets1 &#x2190; 'readData' ifHnd (return 'False') 400
                     liftIO $ print $ 'BS.concat' packets1
-                    packets2 &#x2190; 'readData' ifHnd 200
+                    packets2 &#x2190; 'readData' ifHnd (return 'False') 200
                     liftIO $ print $ 'BS.concat' packets1
     in runChunkedReaderT reader 'BS.empty'
 @
@@ -385,23 +387,31 @@ runChunkedReaderT = runStateT ∘ unCR
 
 {-| Reads data from the given FTDI interface by performing bulk reads.
 
-This function produces an action in the ChunkedReaderT monad that, when
-executed, will read exactly the requested number of bytes. Executing the
-readData action will block until all data are read. The result value is a list
-of chunks, represented as ByteStrings. This representation was choosen for
-efficiency reasons.
+This function produces an action in the @ChunkedReaderT@ monad that
+will read exactly the requested number of bytes unless it is
+explicitly asked to stop early. Executing the @readData@ action will
+block until either:
 
-Data are read in packets. The function may choose to request more than needed
-in order to get the highest possible bandwidth. The excess of bytes is kept as
-the state of the ChunkedReaderT monad. A subsequent invocation of readData will
-first return bytes from the stored state before requesting more from the device
-itself. A consequence of this behaviour is that even when you request 100 bytes
-the function will actually request 512 bytes (depending on the packet size) and
-/block/ until all 512 bytes are read! There is no workaround since requesting
+ * All data are read
+
+ * The given checkStop action returns 'True'
+
+The result value is a list of chunks, represented as
+@ByteString@s. This representation was choosen for efficiency reasons.
+
+Data are read in packets. The function may choose to request more than
+needed in order to get the highest possible bandwidth. The excess of
+bytes is kept as the state of the @ChunkedReaderT@ monad. A subsequent
+invocation of @readData@ will first return bytes from the stored state
+before requesting more from the device itself. A consequence of this
+behaviour is that even when you request 100 bytes the function will
+actually request 512 bytes (depending on the packet size) and /block/
+until all 512 bytes are read! There is no workaround since requesting
 less bytes than the packet size is an error.
 
-USB timeouts will not interrupt readData. In case of a timeout readData will
-simply resume reading data. A small USB timeout can degrade performance.
+USB timeouts will not interrupt @readData@. In case of a timeout
+@readData@ will simply resume reading data. A small USB timeout can
+degrade performance.
 
 The FTDI latency timer can cause poor performance. If the FTDI chip can't fill
 a packet before the latency timer fires it is forced to send an incomplete
@@ -420,13 +430,16 @@ Example:
 
 @
   -- Read 100 data bytes from ifHnd
-  (packets, rest) &#x2190; 'runChunkedReaderT' ('readData' ifHnd 100) 'BS.empty'
+  (packets, rest) &#x2190; 'runChunkedReaderT' ('readData' ifHnd (return 'False') 100) 'BS.empty'
 @
 
 -}
--- TODO: timeout
-readData ∷ ∀ m. MonadIO m ⇒ InterfaceHandle → Int → ChunkedReaderT m [ByteString]
-readData ifHnd numBytes = ChunkedReaderT $
+readData ∷ ∀ m. MonadIO m
+         ⇒ InterfaceHandle
+         → m Bool -- ^ Check stop action
+         → Int -- ^ Number of bytes to read
+         → ChunkedReaderT m [ByteString]
+readData ifHnd checkStop numBytes = ChunkedReaderT $
     do prevRest ← get
        let readNumBytes = numBytes - BS.length prevRest
        if readNumBytes > 0
@@ -462,7 +475,11 @@ readData ifHnd numBytes = ChunkedReaderT $
         --   receivedBytes < packetSize
         if receivedDataBytes < readNumBytes
           then let xs = splitPackets bytes
-               in liftM (xs ⊕) (readLoop $ readNumBytes - receivedDataBytes)
+               in lift checkStop >>= \stop →
+                  if stop
+                  then put BS.empty >> return xs
+                  else liftM (xs ⊕)
+                             (readLoop $ readNumBytes - receivedDataBytes)
           else -- We might have received too much data, since we can only
                -- request multiples of 'packetSize' bytes. Split the byte
                -- string at such an index that the first part contains
