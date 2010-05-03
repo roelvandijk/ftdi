@@ -1,5 +1,5 @@
 name:          ftdi
-version:       0.1
+version:       0.2
 cabal-version: >=1.6
 build-type:    Custom
 stability:     experimental
@@ -39,11 +39,12 @@ library
   exposed-modules: System.FTDI
   other-modules: System.FTDI.Internal
                , System.FTDI.Utils
-  build-depends: base                 >= 4     && < 4.3
-               , base-unicode-symbols >= 0.1.1 && < 0.2
+  build-depends: base                 >= 3.0.3 && < 4.3
+               , base-unicode-symbols >= 0.1.1 && < 0.3
                , bytestring           >= 0.9.1 && < 0.10
+               , monads-fd            >= 0.1   && < 0.2
                , safe                 >= 0.2   && < 0.3
-               , transformers         >= 0.1.4 && < 0.2
+               , transformers         >= 0.2   && < 0.3
                , usb                  >= 0.3   && < 0.4
   ghc-options: -Wall
 

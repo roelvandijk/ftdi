@@ -14,7 +14,7 @@ module System.FTDI.Internal where
 -- Imports
 -------------------------------------------------------------------------------
 
--- base
+-- from base:
 import Control.Applicative       ( Applicative, (<$>), Alternative )
 import Control.Exception         ( Exception, bracket, throwIO )
 import Control.Monad             ( Functor
@@ -53,29 +53,31 @@ import System.IO                 ( IO )
 import Text.Read                 ( Read )
 import Text.Show                 ( Show )
 
--- base-unicode-symbols
+-- from base-unicode-symbols:
 import Data.Eq.Unicode           ( (≡) )
 import Data.Function.Unicode     ( (∘) )
 import Data.Monoid.Unicode       ( (⊕) )
 import Prelude.Unicode           ( (⋅), (÷) )
 
--- bytestring
+-- from bytestring:
 import qualified Data.ByteString as BS ( empty, drop, length
                                        , null, splitAt, unpack
                                        )
 import Data.ByteString           ( ByteString )
 
--- ftdi
+-- from ftdi:
 import System.FTDI.Utils         ( divRndUp, clamp, genFromEnum, orBits )
 
--- safe
+-- from monads-fd:
+import Control.Monad.Trans       ( MonadTrans, MonadIO, lift, liftIO )
+
+-- from safe:
 import Safe                      ( atMay, headMay )
 
--- transformers
-import Control.Monad.Trans       ( MonadTrans, MonadIO, lift, liftIO )
+-- from transformers:
 import Control.Monad.Trans.State ( StateT, get, put, runStateT )
 
--- usb
+-- from usb:
 import qualified System.USB as USB
 
 
