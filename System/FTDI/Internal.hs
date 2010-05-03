@@ -68,14 +68,13 @@ import Data.ByteString           ( ByteString )
 -- from ftdi:
 import System.FTDI.Utils         ( divRndUp, clamp, genFromEnum, orBits )
 
--- from monads-fd:
-import Control.Monad.Trans       ( MonadTrans, MonadIO, lift, liftIO )
-
 -- from safe:
 import Safe                      ( atMay, headMay )
 
 -- from transformers:
 import Control.Monad.Trans.State ( StateT, get, put, runStateT )
+import Control.Monad.Trans.Class ( MonadTrans, lift )
+import Control.Monad.IO.Class    ( MonadIO, liftIO )
 
 -- from usb:
 import qualified System.USB as USB
