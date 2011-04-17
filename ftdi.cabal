@@ -5,7 +5,7 @@ build-type:    Custom
 stability:     experimental
 author:        Roel van Dijk <vandijk.roel@gmail.com>
 maintainer:    Roel van Dijk <vandijk.roel@gmail.com>
-copyright:     (c) 2009, 2010 Roel van Dijk
+copyright:     2009—2011 Roel van Dijk <vandijk.roel@gmail.com>
 license:       BSD3
 license-file:  LICENSE
 category:      System
@@ -15,8 +15,8 @@ description:
   implemented as a lightweight wrapper around the usb library.
 
 source-repository head
-  type:     darcs
-  location: http://code.haskell.org/~roelvandijk/code/ftdi
+  type:     git
+  location: git://github.com/roelvandijk/ftdi.git
 
 -------------------------------------------------------------------------------
 
